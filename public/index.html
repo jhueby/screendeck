@@ -32,6 +32,16 @@
   .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px; background: var(--muted); }
   .dot.attached { background: var(--ok); box-shadow: 0 0 6px #4ec9a080; }
   .dot.dead { background: var(--bad); }
+  .dot.active { background: var(--accent); box-shadow: 0 0 7px #6ea8fe; animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  .sess .name { cursor: text; }
+  .sess .name:hover { color: var(--accent); text-decoration: underline dotted; }
+  .preview {
+    margin-top: 6px; padding: 6px 7px; background: #0b0e13; border: 1px solid #1e2430;
+    border-radius: 5px; font-family: ui-monospace, monospace; font-size: 10.5px;
+    line-height: 1.35; color: #93a4bd; max-height: 52px; overflow: hidden;
+    white-space: pre-wrap; word-break: break-all;
+  }
   .sess .name { font-family: ui-monospace, monospace; font-size: 12px; overflow: hidden;
                 text-overflow: ellipsis; white-space: nowrap; }
   .sess .meta { color: var(--muted); font-size: 11px; margin-top: 5px; word-break: break-all; }

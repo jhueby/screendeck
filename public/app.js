@@ -6,6 +6,9 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
+const esc = (t) => String(t == null ? '' : t)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;');
 let term, fit, ws, current = null;
 
 function initTerm() {
@@ -69,7 +72,7 @@ function attach(sess) {
 
 async function refresh() {
   try {
-    const r = await fetch('/api/sessions');
+    const r = await fetch('/api/sessions?preview=1');
     const j = await r.json();
     $('host').textContent = j.host || '';
     window._sessions = j.sessions || [];
@@ -95,21 +98,44 @@ function render() {
     const killBtn = s.self
       ? '<span class="kill self" title="This session hosts the server — killing it would stop Screendeck">server</span>'
       : `<button class="kill" data-kill="${s.name}">kill</button>`;
+    const dotCls = s.dead ? 'dead' : s.active ? 'active' : s.attached ? 'attached' : '';
+    const preview = (s.preview && s.preview.length)
+      ? `<div class="preview">${s.preview.map(esc).join('<br>')}</div>` : '';
     el.innerHTML = `
       ${killBtn}
       <div class="row1">
-        <span class="dot ${s.dead ? 'dead' : s.attached ? 'attached' : ''}"
-              title="${s.state || ''}"></span>
-        <span class="name">${s.label || s.name}</span>
+        <span class="dot ${dotCls}" title="${esc(s.state || '')}${s.active ? ' — producing output' : ''}"></span>
+        <span class="name" data-rename="${esc(s.name)}" title="click to rename">${esc(s.label || s.name)}</span>
       </div>
-      <div class="cmd">${shortCmd}</div>
-      <div class="meta">${s.cwd || ''}<br>${s.created}</div>`;
+      <div class="cmd">${esc(shortCmd)}</div>
+      ${preview}
+      <div class="meta">${esc(s.cwd || '')}<br>${esc(s.created)}</div>`;
     el.addEventListener('click', (ev) => {
       if (ev.target.dataset.kill) return;
       attach(s);
     });
     list.appendChild(el);
   }
+  list.querySelectorAll('[data-rename]').forEach((n) => {
+    n.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const full = n.dataset.rename;
+      const cur = n.textContent;
+      const next = prompt('Rename session\n\n(letters, digits, . _ - only)', cur);
+      if (!next || next === cur) return;
+      const r = await fetch('/api/sessions/' + encodeURIComponent(full), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newName: next }),
+      });
+      const j = await r.json();
+      if (j.error) { alert('Rename failed: ' + j.error); return; }
+      // the attached socket still points at the old name; re-attach if it was current
+      if (current && current.name === full) { current = { ...current, name: j.name }; }
+      refresh();
+    });
+  });
+
   list.querySelectorAll('[data-kill]').forEach((b) => {
     b.addEventListener('click', async (ev) => {
       ev.stopPropagation();

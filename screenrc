@@ -2,3 +2,5 @@ defscrollback 20000
 startup_message off
 altscreen on
 term xterm-256color
+defencoding UTF-8
+encoding UTF-8 UTF-8

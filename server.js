@@ -74,6 +74,45 @@ async function sessionCwd(pid) {
   return null;
 }
 
+// Remembers the last capture per session so we can tell "changed since last
+// poll" (i.e. actively producing output) from "idle".
+const lastCapture = new Map();
+
+/**
+ * Capture a session's visible screen without attaching to it.
+ * `screen -X hardcopy` dumps the current window to a file — this is what makes
+ * an at-a-glance overview possible for sessions running full-screen TUIs.
+ */
+async function sessionPreview(name) {
+  const tmp = path.join(os.tmpdir(), `sd-cap-${process.pid}-${Buffer.from(name).toString('hex').slice(0, 16)}`);
+  try {
+    await sh('screen', ['-S', name, '-X', 'hardcopy', tmp]);
+    // hardcopy is asynchronous inside screen; give it a moment to land.
+    await new Promise((r) => setTimeout(r, 60));
+    if (!fs.existsSync(tmp)) return { preview: null, active: false };
+    const text = fs.readFileSync(tmp, 'utf8');
+    fs.unlink(tmp, () => {});
+    const lines = text
+      .split('\n')
+      // Terminal captures carry control sequences and, for sessions not started
+      // in UTF-8 mode, invalid byte sequences. Strip both so the preview is
+      // readable rather than a wall of replacement characters.
+      .map((l) => l
+        .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
+        .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
+        .replace(/\uFFFD+/g, '')
+        .replace(/\s+$/, ''))
+      .filter((l) => l.trim());
+    const tail = lines.slice(-3);
+    const sig = tail.join('\n');
+    const prev = lastCapture.get(name);
+    lastCapture.set(name, sig);
+    return { preview: tail, active: prev !== undefined && prev !== sig };
+  } catch (_) {
+    return { preview: null, active: false };
+  }
+}
+
 /** What is actually running inside the session — useful at a glance. */
 async function sessionCommand(pid) {
   const { stdout } = await sh('pgrep', ['-P', String(pid)]);
@@ -87,7 +126,7 @@ async function sessionCommand(pid) {
   return null;
 }
 
-async function listSessions() {
+async function listSessions(withPreview = false) {
   const { stdout } = await sh('screen', ['-ls']);
   const host = os.hostname();
   const out = [];
@@ -119,14 +158,16 @@ async function listSessions() {
       command: await sessionCommand(pid),
       // the session hosting this server — the UI must not offer to kill it
       self: OWN_SESSION === fullName,
+      ...(withPreview && !/Dead/i.test(state) ? await sessionPreview(fullName) : {}),
     });
   }
   return out.reverse(); // newest first
 }
 
-app.get('/api/sessions', async (_req, res) => {
+app.get('/api/sessions', async (req, res) => {
   try {
-    res.json({ sessions: await listSessions(), host: os.hostname() });
+    const withPreview = req.query.preview === '1';
+    res.json({ sessions: await listSessions(withPreview), host: os.hostname() });
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
@@ -170,6 +211,18 @@ app.post('/api/sessions', async (req, res) => {
   );
   if (err) return res.status(500).json({ error: stderr || String(err) });
   res.json({ ok: true, session: sessionName, cwd, command: toRun });
+});
+
+app.patch('/api/sessions/:name', async (req, res) => {
+  const { newName } = req.body || {};
+  // screen session names go into a socket filename, so keep them conservative.
+  const clean = String(newName || '').replace(/[^A-Za-z0-9._-]/g, '').slice(0, 60);
+  if (!clean) return res.status(400).json({ error: 'invalid name' });
+  const { err, stderr } = await sh('screen', ['-S', req.params.name, '-X', 'sessionname', clean]);
+  if (err) return res.status(500).json({ error: stderr || String(err) });
+  // The pid prefix is preserved, so the new full name is predictable.
+  const pid = req.params.name.split('.')[0];
+  res.json({ ok: true, name: `${pid}.${clean}` });
 });
 
 app.delete('/api/sessions/:name', async (req, res) => {
