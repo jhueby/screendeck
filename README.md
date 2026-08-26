@@ -62,6 +62,16 @@ Requires Node 18+, `screen`, and `procps` (for `pgrep`). `node-pty` compiles
 natively, so a toolchain (`python3`, `make`, `g++`) must be present at install
 time.
 
+## Running as a service
+
+See [`screendeck.service.example`](screendeck.service.example).
+
+**One trap worth knowing:** systemd's default `KillMode=control-group` kills
+everything in the service's cgroup on restart. screen daemonises its sessions
+but they remain in that cgroup, so restarting Screendeck would terminate every
+session it had started. The example unit sets `KillMode=process` to prevent
+that — verified by restarting the service with live sessions attached.
+
 ## Configuration
 
 All optional, via environment variables.
@@ -74,6 +84,7 @@ All optional, via environment variables.
 | `DEFAULT_DIR` | `$HOME` | starting directory for new sessions |
 | `WORKSPACE_ROOT` | *(unset)* | restrict the directory browser to this subtree |
 | `SESSION_PREFIX` | `sd-` | prefix for session names created here |
+| `STATE_FILE` | `~/.screendeck-order.json` | where the sidebar ordering is persisted |
 
 `DEFAULT_COMMAND` is what makes this general — point it at a shell, a REPL, a
 build watcher, a monitoring tool, or any long-running CLI.
@@ -84,7 +95,9 @@ build watcher, a monitoring tool, or any long-running CLI.
 |---|---|---|
 | `GET` | `/api/sessions` | list sessions with pid, cwd, running command, attach state |
 | `POST` | `/api/sessions` | create one — `{name, dir, command}` |
+| `PATCH` | `/api/sessions/:name` | rename — `{newName}` |
 | `DELETE` | `/api/sessions/:name` | kill a session |
+| `GET`/`PUT` | `/api/order` | read/write the sidebar ordering |
 | `GET` | `/api/dirs?path=` | browse directories for the new-session dialog |
 | `GET` | `/api/config` | effective defaults |
 | `WS` | `/ws?session=&cols=&rows=` | attach a terminal |
@@ -99,6 +112,11 @@ build watcher, a monitoring tool, or any long-running CLI.
   sessions, since every session on a host would otherwise show the same label.
 - **Working directory** is read from the session's child process via `/proc`,
   not from where `screen` itself was launched.
+- **Ordering is drag-and-drop** and stored server-side, so it is the same from
+  every device rather than per-browser. New sessions appear at the top.
+- **Previews** come from `screen -X hardcopy`, which reads a session's visible
+  screen without attaching. Comparing successive captures also gives the
+  "currently producing output" indicator.
 
 ## Requirements
 

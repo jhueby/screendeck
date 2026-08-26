@@ -13,6 +13,9 @@ const esc = (t) => String(t == null ? '' : t)
   .replace(/"/g, '&quot;');
 
 let term, fit, ws, current = null;
+// The 5s poll re-renders the list, which would yank the element out from under
+// a drag in progress. Suspend refreshes while dragging.
+let dragging = null, suspendRefresh = false;
 
 /* ─────────── terminal ─────────── */
 function initTerm() {
@@ -116,6 +119,7 @@ function wireComposer() {
 
 /* ─────────── sessions ─────────── */
 async function refresh() {
+  if (suspendRefresh) return;
   try {
     const r = await fetch('/api/sessions?preview=1');
     const j = await r.json();
@@ -137,6 +141,8 @@ function render() {
   for (const s of sessions) {
     const el = document.createElement('div');
     el.className = 'conv' + (current && current.name === s.name ? ' active' : '');
+    el.draggable = true;
+    el.dataset.name = s.name;
     const dot = s.dead ? 'dead' : s.active ? 'active' : s.attached ? 'attached' : '';
     // Prefer the live screen contents; fall back to the running command.
     const sub = s.dead ? 'dead — process gone'
@@ -156,8 +162,48 @@ function render() {
       <div class="conv-sub">${esc(sub).slice(0, 200)}</div>`;
     el.addEventListener('click', (ev) => {
       if (ev.target.closest('.conv-actions')) return;
+      // A drag ends with a click event on some browsers; ignore it.
+      if (el.dataset.justDragged) { delete el.dataset.justDragged; return; }
       attach(s);
     });
+
+    el.addEventListener('dragstart', (ev) => {
+      dragging = el;
+      suspendRefresh = true;
+      el.classList.add('drag-src');
+      ev.dataTransfer.effectAllowed = 'move';
+      // Firefox will not start a drag without data set.
+      ev.dataTransfer.setData('text/plain', s.name);
+    });
+    el.addEventListener('dragend', async () => {
+      el.classList.remove('drag-src');
+      list.querySelectorAll('.drop-before,.drop-after')
+        .forEach((n) => n.classList.remove('drop-before', 'drop-after'));
+      dragging = null;
+      el.dataset.justDragged = '1';
+      await persistOrder();
+      suspendRefresh = false;
+    });
+    el.addEventListener('dragover', (ev) => {
+      if (!dragging || dragging === el) return;
+      ev.preventDefault();
+      const r = el.getBoundingClientRect();
+      const after = ev.clientY > r.top + r.height / 2;
+      el.classList.toggle('drop-after', after);
+      el.classList.toggle('drop-before', !after);
+    });
+    el.addEventListener('dragleave', () => {
+      el.classList.remove('drop-before', 'drop-after');
+    });
+    el.addEventListener('drop', (ev) => {
+      if (!dragging || dragging === el) return;
+      ev.preventDefault();
+      const r = el.getBoundingClientRect();
+      const after = ev.clientY > r.top + r.height / 2;
+      el.parentNode.insertBefore(dragging, after ? el.nextSibling : el);
+      el.classList.remove('drop-before', 'drop-after');
+    });
+
     list.appendChild(el);
   }
 
@@ -198,6 +244,22 @@ function render() {
       refresh();
     });
   });
+}
+
+async function persistOrder() {
+  const order = [...$('list').querySelectorAll('.conv')].map((n) => n.dataset.name);
+  if (!order.length) return;
+  // Keep the local copy in the new order too, so the next render agrees with
+  // what the user just did rather than briefly snapping back.
+  const byName = new Map((window._sessions || []).map((s) => [s.name, s]));
+  window._sessions = order.map((n) => byName.get(n)).filter(Boolean);
+  try {
+    await fetch('/api/order', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order }),
+    });
+  } catch (_) { /* order is cosmetic; a failure is not worth interrupting for */ }
 }
 
 /* ─────────── new-session modal ─────────── */

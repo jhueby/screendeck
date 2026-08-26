@@ -42,6 +42,26 @@ const DEFAULT_COMMAND = process.env.DEFAULT_COMMAND || process.env.SHELL || 'bas
 // STY as "<pid>.<name>" for exactly this kind of self-identification.
 const OWN_SESSION = process.env.STY || null;
 
+// Screen has no notion of session order, so a user-defined one has to be stored.
+// Kept server-side rather than in localStorage so the order is the same from a
+// phone as from a laptop. It is ephemeral data about ephemeral things — losing
+// it costs nothing but the arrangement.
+const STATE_FILE = process.env.STATE_FILE || path.join(os.homedir(), '.screendeck-order.json');
+
+function loadOrder() {
+  try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')).order || []; }
+  catch (_) { return []; }
+}
+function saveOrder(order) {
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify({ order }, null, 2));
+    return true;
+  } catch (e) {
+    console.error('could not persist session order:', e.message);
+    return false;
+  }
+}
+
 const app = express();
 app.use(express.json({ limit: '64kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -161,7 +181,20 @@ async function listSessions(withPreview = false) {
       ...(withPreview && !/Dead/i.test(state) ? await sessionPreview(fullName) : {}),
     });
   }
-  return out.reverse(); // newest first
+  out.reverse(); // newest first, before any user ordering is applied
+
+  const order = loadOrder();
+  if (!order.length) return out;
+  const rank = new Map(order.map((n, i) => [n, i]));
+  return out.sort((a, b) => {
+    const ra = rank.has(a.name) ? rank.get(a.name) : -1;
+    const rb = rank.has(b.name) ? rank.get(b.name) : -1;
+    // Unranked sessions are new — keep them at the top where they get noticed.
+    if (ra === -1 && rb === -1) return 0;
+    if (ra === -1) return -1;
+    if (rb === -1) return 1;
+    return ra - rb;
+  });
 }
 
 app.get('/api/sessions', async (req, res) => {
@@ -171,6 +204,16 @@ app.get('/api/sessions', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
+});
+
+app.get('/api/order', (_req, res) => res.json({ order: loadOrder() }));
+
+app.put('/api/order', (req, res) => {
+  const { order } = req.body || {};
+  if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be an array' });
+  const clean = order.filter((n) => typeof n === 'string').slice(0, 500);
+  if (!saveOrder(clean)) return res.status(500).json({ error: 'could not persist order' });
+  res.json({ ok: true, count: clean.length });
 });
 
 app.get('/api/config', (_req, res) => {
@@ -222,7 +265,12 @@ app.patch('/api/sessions/:name', async (req, res) => {
   if (err) return res.status(500).json({ error: stderr || String(err) });
   // The pid prefix is preserved, so the new full name is predictable.
   const pid = req.params.name.split('.')[0];
-  res.json({ ok: true, name: `${pid}.${clean}` });
+  const newFull = `${pid}.${clean}`;
+  // The stored order is keyed by full name, which the rename just changed.
+  const order = loadOrder();
+  const idx = order.indexOf(req.params.name);
+  if (idx !== -1) { order[idx] = newFull; saveOrder(order); }
+  res.json({ ok: true, name: newFull });
 });
 
 app.delete('/api/sessions/:name', async (req, res) => {

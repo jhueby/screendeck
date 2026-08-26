@@ -1,0 +1,35 @@
+# Example systemd unit (user or system scope).
+#
+# Install as a user service:
+#   cp screendeck.service.example ~/.config/systemd/user/screendeck.service
+#   systemctl --user daemon-reload && systemctl --user enable --now screendeck
+#   loginctl enable-linger "$USER"      # so it survives a reboot without login
+#
+# Adjust ExecStart to your node path — systemd has no nvm/asdf shims in PATH.
+
+[Unit]
+Description=Screendeck — web console for GNU screen sessions
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/screendeck
+ExecStart=/usr/bin/node %h/screendeck/server.js
+
+Environment=NODE_ENV=production
+Environment=PORT=7681
+Environment=BIND=0.0.0.0
+Environment=DEFAULT_COMMAND=bash
+
+# IMPORTANT. screen daemonises the sessions it starts, but they still land in
+# this service's cgroup. With systemd's default KillMode=control-group, a
+# restart of screendeck kills every session it ever created — which defeats the
+# entire point of using screen. KillMode=process leaves them running.
+KillMode=process
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
