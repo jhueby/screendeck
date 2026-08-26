@@ -37,6 +37,11 @@ const DEFAULT_DIR = process.env.DEFAULT_DIR || os.homedir();
 const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || null;
 const DEFAULT_COMMAND = process.env.DEFAULT_COMMAND || process.env.SHELL || 'bash';
 
+// If this server is itself running inside screen, that session must not be
+// killable from the UI — doing so takes the server down with it. screen exports
+// STY as "<pid>.<name>" for exactly this kind of self-identification.
+const OWN_SESSION = process.env.STY || null;
+
 const app = express();
 app.use(express.json({ limit: '64kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -98,14 +103,17 @@ async function listSessions() {
     const label = parts.length >= 2 && parts[parts.length - 1] === host
       ? parts.slice(0, -1).join('.')
       : tail;
+    const fullName = `${pid}.${tail}`;
     out.push({
-      name: `${pid}.${tail}`,
+      name: fullName,
       pid: Number(pid),
       label,
       created,
       attached: state === 'Attached',
       cwd: await sessionCwd(pid),
       command: await sessionCommand(pid),
+      // the session hosting this server — the UI must not offer to kill it
+      self: OWN_SESSION === fullName,
     });
   }
   return out.reverse(); // newest first
@@ -160,6 +168,13 @@ app.post('/api/sessions', async (req, res) => {
 });
 
 app.delete('/api/sessions/:name', async (req, res) => {
+  // Defence in depth: a crafted request must not be able to kill the session
+  // this server runs in, even though the UI hides the button.
+  if (OWN_SESSION && req.params.name === OWN_SESSION) {
+    return res.status(409).json({
+      error: 'refusing to kill the session hosting this server',
+    });
+  }
   const { err, stderr } = await sh('screen', ['-S', req.params.name, '-X', 'quit']);
   if (err) return res.status(500).json({ error: stderr || String(err) });
   res.json({ ok: true });

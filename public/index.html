@@ -39,6 +39,8 @@
   .kill { float: right; background: none; border: 1px solid var(--line); color: var(--muted);
           border-radius: 5px; font-size: 11px; padding: 1px 7px; cursor: pointer; }
   .kill:hover { color: var(--bad); border-color: var(--bad); }
+  .kill.self { cursor: default; color: var(--muted); opacity: .7; }
+  .kill.self:hover { color: var(--muted); border-color: var(--line); }
   .sidebar-actions { padding: 10px; border-top: 1px solid var(--line); }
   button.primary { width: 100%; background: var(--accent); color: #0c1220; border: 0;
                    padding: 9px; border-radius: 7px; font-weight: 600; cursor: pointer; }

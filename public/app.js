@@ -91,8 +91,11 @@ function render() {
     const el = document.createElement('div');
     el.className = 'sess' + (current && current.name === s.name ? ' active' : '');
     const shortCmd = s.command ? s.command.replace(/^\/\S+\//, '') : '—';
+    const killBtn = s.self
+      ? '<span class="kill self" title="This session hosts the server — killing it would stop Screendeck">server</span>'
+      : `<button class="kill" data-kill="${s.name}">kill</button>`;
     el.innerHTML = `
-      <button class="kill" data-kill="${s.name}">kill</button>
+      ${killBtn}
       <div class="row1">
         <span class="dot ${s.attached ? 'attached' : ''}"></span>
         <span class="name">${s.label || s.name}</span>
