@@ -90,14 +90,16 @@ function render() {
   for (const s of sessions) {
     const el = document.createElement('div');
     el.className = 'sess' + (current && current.name === s.name ? ' active' : '');
-    const shortCmd = s.command ? s.command.replace(/^\/\S+\//, '') : '—';
+    const shortCmd = s.dead ? 'dead — process gone, socket left behind'
+      : (s.command ? s.command.replace(/^\/\S+\//, '') : '—');
     const killBtn = s.self
       ? '<span class="kill self" title="This session hosts the server — killing it would stop Screendeck">server</span>'
       : `<button class="kill" data-kill="${s.name}">kill</button>`;
     el.innerHTML = `
       ${killBtn}
       <div class="row1">
-        <span class="dot ${s.attached ? 'attached' : ''}"></span>
+        <span class="dot ${s.dead ? 'dead' : s.attached ? 'attached' : ''}"
+              title="${s.state || ''}"></span>
         <span class="name">${s.label || s.name}</span>
       </div>
       <div class="cmd">${shortCmd}</div>

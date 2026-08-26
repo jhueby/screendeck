@@ -93,7 +93,10 @@ async function listSessions() {
   const out = [];
   for (const line of stdout.split('\n')) {
     // "\t203304.pts-1.myhost\t(01/02/2026 11:43:42 PM)\t(Detached)"
-    const m = line.match(/^\s*(\d+)\.(\S+)\s+\(([^)]+)\)\s+\((Attached|Detached)\)/);
+    // Match any trailing state. screen reports "Dead ???" for sessions whose
+    // process is gone but whose socket remains — e.g. after a container restart.
+    // Matching only Attached|Detached silently hid those and showed an empty list.
+    const m = line.match(/^\s*(\d+)\.(\S+)\s+\(([^)]+)\)\s+\(([^)]+)\)\s*$/);
     if (!m) continue;
     const [, pid, tail, created, state] = m;
     // Names are "<pid>.<custom>" (screen -S custom) or "<pid>.<tty>.<host>"
@@ -109,7 +112,9 @@ async function listSessions() {
       pid: Number(pid),
       label,
       created,
-      attached: state === 'Attached',
+      attached: /Attached/i.test(state),
+      dead: /Dead/i.test(state),
+      state: state.trim(),
       cwd: await sessionCwd(pid),
       command: await sessionCommand(pid),
       // the session hosting this server — the UI must not offer to kill it
@@ -220,6 +225,13 @@ wss.on('connection', (ws, req) => {
     try { term.write('\x01d'); } catch (_) {}
     setTimeout(() => { try { term.kill(); } catch (_) {} }, 200);
   });
+});
+
+// A container restart (or a host reboot) leaves sockets behind for processes
+// that no longer exist. Clear them once at startup so the list reflects reality.
+sh('screen', ['-wipe']).then(({ stdout }) => {
+  const wiped = (stdout.match(/^\s*\d+\./gm) || []).length;
+  if (wiped) console.log(`wiped ${wiped} dead session socket(s) left over from a previous run`);
 });
 
 server.listen(PORT, BIND, () => {

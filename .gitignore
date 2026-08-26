@@ -9,3 +9,6 @@ npm-debug.log*
 *.key
 !public/vendor/*.js
 secrets/
+
+# local-only compose overrides
+docker-compose.override.yml

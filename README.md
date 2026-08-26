@@ -39,7 +39,10 @@ docker compose up -d --build
 
 Sessions live **inside** the container, so:
 
-- they do **not** survive `docker rm` (they do survive `restart`)
+- they do **not** survive `docker restart` or `docker rm`. A container restart
+  kills every process in it; screen's socket file survives on the container
+  filesystem, so the session lingers as `Dead ???` until it is wiped. Screendeck
+  clears these at startup.
 - whatever you want to run must exist in the image, or be bind-mounted in
 - `./workspace` is mounted at `/workspace` and is where new sessions start
 
