@@ -128,6 +128,7 @@
     border-radius:7px;padding:4px 9px;font-size:11px;cursor:pointer;
   }
   .keys button:hover{color:var(--fg);border-color:#4a4a4a}
+  .keys button.on{color:var(--accent);border-color:#2c4a6d;background:#16202e}
 
   /* ─────────── empty state ─────────── */
   .empty{margin:auto;text-align:center;color:var(--muted);padding:40px;max-width:460px}
@@ -204,11 +205,15 @@
     <div class="composer-hint">
       <span><kbd>Enter</kbd> send</span>
       <span><kbd>Shift</kbd>+<kbd>Enter</kbd> newline</span>
+      <span><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd>/<kbd>V</kbd> copy·paste</span>
       <span class="keys" id="keys">
-        <button data-key="ctrlc">Ctrl-C</button>
+        <button data-key="ctrlc" title="Interrupt (SIGINT)">Ctrl-C</button>
         <button data-key="esc">Esc</button>
         <button data-key="tab">Tab</button>
         <button data-key="up">↑</button>
+        <button data-act="copy" title="Copy selection, or the visible screen if nothing is selected">Copy</button>
+        <button data-act="paste" title="Paste (needs HTTPS; otherwise use Ctrl+V)">Paste</button>
+        <button data-act="autocopy" title="Copy automatically whenever you select text">select=copy</button>
       </span>
     </div>
   </div>

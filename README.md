@@ -102,6 +102,27 @@ build watcher, a monitoring tool, or any long-running CLI.
 | `GET` | `/api/config` | effective defaults |
 | `WS` | `/ws?session=&cols=&rows=` | attach a terminal |
 
+## Copy and paste
+
+| Action | How |
+|---|---|
+| Copy selection | select text, or `Ctrl+Shift+C`, or `Ctrl+C` when text is selected |
+| Paste | `Ctrl+V` (also `Ctrl+Shift+V`, middle-click) |
+| Copy on touch | **Copy** button — copies the selection, or the visible screen if nothing is selected |
+| Select = copy | toggle button; copies automatically on selection, like most terminals |
+
+`Ctrl+C` only copies when something is selected. With no selection it passes
+through as SIGINT, so interrupting a running process still works.
+
+**Over plain HTTP, the Paste *button* will not work.** Browsers gate
+`navigator.clipboard` behind a secure context, so reading the clipboard
+programmatically is unavailable on a LAN address. `Ctrl+V` is unaffected — a
+user-initiated paste fires a native event that does not need the API. Copying
+falls back to `execCommand`, which still works on HTTP.
+
+To get the Paste button working, serve over HTTPS (a reverse proxy with a
+certificate) or reach it via `localhost` — both count as secure contexts.
+
 ## Behaviour worth knowing
 
 - **Attach uses `screen -x`, not `-r`.** Opening a browser tab does not steal the

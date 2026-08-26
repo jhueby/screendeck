@@ -16,6 +16,7 @@ let term, fit, ws, current = null;
 // The 5s poll re-renders the list, which would yank the element out from under
 // a drag in progress. Suspend refreshes while dragging.
 let dragging = null, suspendRefresh = false;
+let autoCopy = localStorage.getItem('sd-autocopy') === '1';
 
 /* ─────────── terminal ─────────── */
 function initTerm() {
@@ -82,6 +83,97 @@ function attach(sess) {
   render();
 }
 
+/* ─────────── clipboard ───────────
+ * Browsers gate navigator.clipboard behind a secure context. Served over plain
+ * HTTP on a LAN address, that API is simply absent — so copying falls back to a
+ * hidden textarea + execCommand, which still works. Reading the clipboard has
+ * no such fallback, but Ctrl+V does not need one: the browser fires a native
+ * paste event that xterm handles, because the user initiated it.
+ */
+const canReadClipboard = () => !!(navigator.clipboard && navigator.clipboard.readText && window.isSecureContext);
+
+function flash(msg) {
+  const el = $('conn');
+  const prev = { text: el.textContent, cls: el.className };
+  el.textContent = msg;
+  setTimeout(() => { el.textContent = prev.text; el.className = prev.cls; }, 1400);
+}
+
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+  document.body.appendChild(ta);
+  ta.select();
+  ta.setSelectionRange(0, ta.value.length);
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (_) {}
+  document.body.removeChild(ta);
+  return ok;
+}
+
+async function copySelection(fallbackToBuffer) {
+  let text = term.getSelection();
+  if (!text && fallbackToBuffer) {
+    // Selecting text by hand is painful on a phone, so the button copies the
+    // visible screen when nothing is selected.
+    const b = term.buffer.active;
+    const lines = [];
+    for (let i = b.viewportY; i < b.viewportY + term.rows; i++) {
+      const line = b.getLine(i);
+      if (line) lines.push(line.translateToString(true));
+    }
+    text = lines.join('\n').replace(/\n+$/, '');
+  }
+  if (!text) { flash('nothing selected'); return; }
+  let ok = false;
+  if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
+    try { await navigator.clipboard.writeText(text); ok = true; } catch (_) {}
+  }
+  if (!ok) ok = fallbackCopy(text);
+  flash(ok ? 'copied' : 'copy blocked');
+}
+
+async function pasteFromClipboard() {
+  if (!canReadClipboard()) {
+    flash('use Ctrl+V');
+    return;
+  }
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) sendRaw(text);
+  } catch (_) { flash('paste blocked'); }
+}
+
+function wireClipboard() {
+  // Terminal conventions: Ctrl+Shift+C/V always copy/paste; plain Ctrl+C copies
+  // only when there is a selection, otherwise it must reach the process as
+  // SIGINT — which is exactly what you want for interrupting an agent.
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type !== 'keydown') return true;
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (ctrl && e.shiftKey && (e.code === 'KeyC' || e.key === 'C')) { copySelection(false); return false; }
+    if (ctrl && e.shiftKey && (e.code === 'KeyV' || e.key === 'V')) { pasteFromClipboard(); return false; }
+    if (ctrl && !e.shiftKey && (e.code === 'KeyC' || e.key === 'c') && term.hasSelection()) {
+      copySelection(false);
+      term.clearSelection();
+      return false;
+    }
+    return true; // Ctrl+V falls through to the browser's native paste event
+  });
+
+  // Select-to-copy, like most terminal emulators.
+  term.onSelectionChange(() => {
+    if (autoCopy && term.hasSelection()) copySelection(false);
+  });
+
+  // Middle-click pastes on Linux desktops; approximate it where we can.
+  $('term').addEventListener('auxclick', (e) => {
+    if (e.button === 1) { e.preventDefault(); pasteFromClipboard(); }
+  });
+}
+
 /* ─────────── composer ─────────── */
 function wireComposer() {
   const ta = $('input');
@@ -110,11 +202,24 @@ function wireComposer() {
   // Control keys a textarea cannot express, but a terminal session needs.
   const SEQ = { ctrlc: '\x03', esc: '\x1b', tab: '\t', up: '\x1b[A' };
   $('keys').addEventListener('click', (e) => {
+    const act = e.target.dataset.act;
+    if (act === 'copy') { copySelection(true); return; }
+    if (act === 'paste') { pasteFromClipboard(); return; }
+    if (act === 'autocopy') {
+      autoCopy = !autoCopy;
+      localStorage.setItem('sd-autocopy', autoCopy ? '1' : '0');
+      e.target.classList.toggle('on', autoCopy);
+      flash(autoCopy ? 'select = copy on' : 'select = copy off');
+      return;
+    }
     const k = e.target.dataset.key;
     if (!k) return;
     sendRaw(SEQ[k] || '');
     ta.focus();
   });
+  // reflect persisted preference on load
+  const acBtn = document.querySelector('[data-act="autocopy"]');
+  if (acBtn && autoCopy) acBtn.classList.add('on');
 }
 
 /* ─────────── sessions ─────────── */
@@ -321,6 +426,7 @@ $('hamb').onclick = () => {
 };
 
 initTerm();
+wireClipboard();
 wireComposer();
 wireModal();
 setConn('idle');
