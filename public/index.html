@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Screendeck</title>
+<link rel="stylesheet" href="/vendor/xterm.css">
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #262b36; --fg: #d6dae2;
+    --muted: #8b93a3; --accent: #6ea8fe; --ok: #4ec9a0; --warn: #e0a458; --bad: #e05f5f;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg); display: flex; height: 100vh; overflow: hidden;
+    font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  /* ---------- sidebar ---------- */
+  aside { width: 300px; flex: 0 0 300px; background: var(--panel); border-right: 1px solid var(--line);
+          display: flex; flex-direction: column; }
+  .brand { padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex;
+           align-items: center; justify-content: space-between; gap: 8px; }
+  .brand h1 { font-size: 14px; margin: 0; letter-spacing: .3px; }
+  .brand .host { color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace; }
+  .list { overflow-y: auto; flex: 1; padding: 8px; }
+  .sess { border: 1px solid var(--line); background: #12151b; border-radius: 8px;
+          padding: 10px; margin-bottom: 8px; cursor: pointer; }
+  .sess:hover { border-color: #35507d; }
+  .sess.active { border-color: var(--accent); background: #16203050; }
+  .sess .row1 { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px; background: var(--muted); }
+  .dot.attached { background: var(--ok); box-shadow: 0 0 6px #4ec9a080; }
+  .sess .name { font-family: ui-monospace, monospace; font-size: 12px; overflow: hidden;
+                text-overflow: ellipsis; white-space: nowrap; }
+  .sess .meta { color: var(--muted); font-size: 11px; margin-top: 5px; word-break: break-all; }
+  .sess .cmd { color: #7f9cc4; font-size: 11px; font-family: ui-monospace, monospace;
+               margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kill { float: right; background: none; border: 1px solid var(--line); color: var(--muted);
+          border-radius: 5px; font-size: 11px; padding: 1px 7px; cursor: pointer; }
+  .kill:hover { color: var(--bad); border-color: var(--bad); }
+  .sidebar-actions { padding: 10px; border-top: 1px solid var(--line); }
+  button.primary { width: 100%; background: var(--accent); color: #0c1220; border: 0;
+                   padding: 9px; border-radius: 7px; font-weight: 600; cursor: pointer; }
+  button.primary:hover { filter: brightness(1.08); }
+  /* ---------- main ---------- */
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .topbar { padding: 9px 14px; border-bottom: 1px solid var(--line); display: flex;
+            align-items: center; gap: 12px; background: var(--panel); }
+  .topbar .title { font-family: ui-monospace, monospace; font-size: 12px; color: var(--fg); }
+  .topbar .sub { color: var(--muted); font-size: 11px; }
+  .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .pill.live { color: var(--ok); border-color: #2c5c4b; }
+  .pill.dead { color: var(--bad); border-color: #5c2c2c; }
+  #term { flex: 1; padding: 6px 8px; min-height: 0; }
+  .empty { margin: auto; color: var(--muted); text-align: center; padding: 40px; }
+  .empty code { background: #12151b; padding: 2px 6px; border-radius: 4px; color: #9fb4d0; }
+  /* ---------- modal ---------- */
+  .modal { position: fixed; inset: 0; background: #000a; display: none; align-items: center;
+           justify-content: center; }
+  .modal.open { display: flex; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+          padding: 18px; width: min(560px, 92vw); }
+  .card h2 { margin: 0 0 12px; font-size: 15px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+  input[type=text], textarea {
+    width: 100%; background: #0d1015; border: 1px solid var(--line); color: var(--fg);
+    border-radius: 6px; padding: 8px; font-family: ui-monospace, monospace; font-size: 12px;
+  }
+  textarea { min-height: 70px; resize: vertical; }
+  .dirlist { max-height: 170px; overflow-y: auto; border: 1px solid var(--line);
+             border-radius: 6px; margin-top: 6px; }
+  .dirlist div { padding: 5px 8px; font-family: ui-monospace, monospace; font-size: 11.5px;
+                 cursor: pointer; border-bottom: 1px solid #1d222c; }
+  .dirlist div:hover { background: #1b2230; color: var(--accent); }
+  .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+  .actions button { padding: 8px 14px; border-radius: 6px; border: 1px solid var(--line);
+                    background: #12151b; color: var(--fg); cursor: pointer; }
+  .actions .go { background: var(--accent); color: #0c1220; border: 0; font-weight: 600; }
+</style>
+</head>
+<body>
+<aside>
+  <div class="brand">
+    <h1>Screendeck</h1>
+    <span class="host" id="host">—</span>
+  </div>
+  <div class="list" id="list"></div>
+  <div class="sidebar-actions">
+    <button class="primary" id="newBtn">+ New session</button>
+  </div>
+</aside>
+
+<main>
+  <div class="topbar">
+    <span class="title" id="curName">no session selected</span>
+    <span class="sub" id="curCwd"></span>
+    <span style="flex:1"></span>
+    <span class="pill" id="conn">idle</span>
+  </div>
+  <div id="term"></div>
+  <div class="empty" id="empty">
+    Pick a session on the left, or create one.<br><br>
+    <span style="font-size:12px">
+      Sessions are GNU <code>screen</code> — they keep running when you close this tab,<br>
+      and you can always attach from a shell with <code>screen -r &lt;name&gt;</code>.
+    </span>
+  </div>
+</main>
+
+<div class="modal" id="modal">
+  <div class="card">
+    <h2>New session</h2>
+    <label>Name</label>
+    <input type="text" id="mName" placeholder="agent" value="agent">
+    <label>Working directory</label>
+    <input type="text" id="mDir" placeholder="/home/user">
+    <div class="dirlist" id="dirs"></div>
+    <label>Command (optional — blank runs the configured default)</label>
+    <textarea id="mCommand" placeholder="e.g. npm run dev   |   htop   |   ./long-job.sh"></textarea>
+    <div class="actions">
+      <button id="mCancel">Cancel</button>
+      <button class="go" id="mCreate">Create</button>
+    </div>
+  </div>
+</div>
+
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

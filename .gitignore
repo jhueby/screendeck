@@ -1,0 +1,11 @@
+node_modules/
+npm-debug.log*
+*.log
+
+# never commit environment or credential material
+.env
+.env.*
+*.pem
+*.key
+!public/vendor/*.js
+secrets/

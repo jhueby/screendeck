@@ -1,0 +1,4 @@
+defscrollback 20000
+startup_message off
+altscreen on
+term xterm-256color

@@ -1,0 +1,15 @@
+{
+  "name": "screendeck",
+  "version": "1.0.0",
+  "description": "A web console for GNU screen sessions — list, attach, create and kill long-running terminal sessions from a browser.",
+  "main": "server.js",
+  "type": "commonjs",
+  "license": "MIT",
+  "scripts": { "start": "node server.js" },
+  "keywords": ["screen", "terminal", "xterm", "web-terminal", "session-manager"],
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.18.0",
+    "node-pty": "^1.0.0"
+  }
+}

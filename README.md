@@ -1,0 +1,109 @@
+# Screendeck
+
+A web console for GNU `screen` sessions. List, attach to, create and kill
+long-running terminal sessions from a browser, with a real interactive terminal
+(colors, arrow keys, Ctrl-C, resize) rather than a read-only log tail.
+
+Useful when you keep long-lived jobs in `screen` and want to check on them from
+a laptop or phone without SSHing in.
+
+## Why screen as the backend
+
+Sessions are plain `screen` sessions. That means:
+
+- they keep running when you close the browser, restart this server, or lose the network
+- you can always fall back to `screen -r <name>` from a shell
+- nothing is stored in a database; `screen -ls` is the source of truth
+
+The web UI is a view onto them, never the thing keeping them alive.
+
+## ⚠️ Security
+
+**Screendeck ships with no authentication.** Anyone who can reach the port gets
+an interactive shell as the user running the process.
+
+Choose one:
+
+- bind to `127.0.0.1` and reach it over an SSH tunnel or VPN (default in `docker-compose.yml`)
+- put an authenticating reverse proxy in front (Caddy, nginx + basic auth, oauth2-proxy)
+- restrict with a firewall to trusted hosts
+
+Do not expose it to the internet as-is.
+
+## Run with Docker
+
+```bash
+docker compose up -d --build
+# then open http://127.0.0.1:7681
+```
+
+Sessions live **inside** the container, so:
+
+- they do **not** survive `docker rm` (they do survive `restart`)
+- whatever you want to run must exist in the image, or be bind-mounted in
+- `./workspace` is mounted at `/workspace` and is where new sessions start
+
+To manage sessions on the **host** instead, don't use the image — run the server
+directly (below). Reaching host `screen` sockets from a container requires
+`--pid=host` plus a bind mount of `/run/screen`, which effectively gives the
+container control of host processes. That trade isn't made here by default.
+
+## Run directly
+
+```bash
+npm install
+node server.js
+```
+
+Requires Node 18+, `screen`, and `procps` (for `pgrep`). `node-pty` compiles
+natively, so a toolchain (`python3`, `make`, `g++`) must be present at install
+time.
+
+## Configuration
+
+All optional, via environment variables.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `7681` | listen port |
+| `BIND` | `0.0.0.0` | listen address |
+| `DEFAULT_COMMAND` | `$SHELL` or `bash` | what a new session runs |
+| `DEFAULT_DIR` | `$HOME` | starting directory for new sessions |
+| `WORKSPACE_ROOT` | *(unset)* | restrict the directory browser to this subtree |
+| `SESSION_PREFIX` | `sd-` | prefix for session names created here |
+
+`DEFAULT_COMMAND` is what makes this general — point it at a shell, a REPL, a
+build watcher, a monitoring tool, or any long-running CLI.
+
+## API
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/sessions` | list sessions with pid, cwd, running command, attach state |
+| `POST` | `/api/sessions` | create one — `{name, dir, command}` |
+| `DELETE` | `/api/sessions/:name` | kill a session |
+| `GET` | `/api/dirs?path=` | browse directories for the new-session dialog |
+| `GET` | `/api/config` | effective defaults |
+| `WS` | `/ws?session=&cols=&rows=` | attach a terminal |
+
+## Behaviour worth knowing
+
+- **Attach uses `screen -x`, not `-r`.** Opening a browser tab does not steal the
+  session from an existing SSH attach, and two tabs can watch the same session.
+- **Closing a tab detaches, it does not kill.** The socket close sends `Ctrl-A d`.
+  Only the explicit *kill* button terminates a session.
+- **Session labels** strip the hostname that `screen` appends to auto-named
+  sessions, since every session on a host would otherwise show the same label.
+- **Working directory** is read from the session's child process via `/proc`,
+  not from where `screen` itself was launched.
+
+## Requirements
+
+- Node 18+
+- GNU `screen`
+- `procps` (`pgrep`)
+- Linux (reads `/proc` for session metadata)
+
+## License
+
+MIT — see [LICENSE](LICENSE).

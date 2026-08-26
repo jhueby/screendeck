@@ -1,0 +1,20 @@
+services:
+  screendeck:
+    build: .
+    image: screendeck:latest
+    container_name: screendeck
+    restart: unless-stopped
+    ports:
+      # Bind to a specific interface rather than 0.0.0.0 — this service has no
+      # authentication and grants an interactive shell to anyone who reaches it.
+      - "127.0.0.1:7681:7681"
+    volumes:
+      - ./workspace:/workspace
+    environment:
+      DEFAULT_COMMAND: bash
+      DEFAULT_DIR: /workspace
+      WORKSPACE_ROOT: /workspace
+      SESSION_PREFIX: sd-
+    # screen needs a tty-ish environment; without this some terminals misbehave
+    tty: true
+    stop_grace_period: 10s
