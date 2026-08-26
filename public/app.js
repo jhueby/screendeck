@@ -1,7 +1,9 @@
 /* Screendeck — front end.
  *
- * One xterm instance, re-attached as you switch sessions. Closing the socket
- * detaches from screen rather than killing it, so the session keeps running.
+ * Chat-shaped shell around a real terminal. The composer sends lines to the
+ * pty; the transcript stays a terminal because the processes people run here
+ * (agents, TUIs, build watchers) redraw the screen rather than emitting
+ * discrete messages. Parsing that into chat bubbles would be guesswork.
  */
 'use strict';
 
@@ -9,67 +11,110 @@ const $ = (id) => document.getElementById(id);
 const esc = (t) => String(t == null ? '' : t)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;');
+
 let term, fit, ws, current = null;
 
+/* ─────────── terminal ─────────── */
 function initTerm() {
   term = new Terminal({
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
     fontSize: 13,
+    lineHeight: 1.2,
     cursorBlink: true,
     scrollback: 20000,
     theme: {
-      background: '#0f1115', foreground: '#d6dae2', cursor: '#6ea8fe',
-      selectionBackground: '#2b3a55',
+      background: '#0d0d0d', foreground: '#ececec', cursor: '#4a9eff',
+      selectionBackground: '#2f4a6d',
+      black: '#0d0d0d', brightBlack: '#6f6f6f',
     },
   });
   fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open($('term'));
 
-  term.onData((d) => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'input', data: d }));
-    }
-  });
+  // Typing directly into the terminal still works — the composer is additive.
+  term.onData((d) => sendRaw(d));
 
-  const ro = new ResizeObserver(() => {
+  new ResizeObserver(() => {
     try {
       fit.fit();
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
       }
     } catch (_) {}
-  });
-  ro.observe($('term'));
+  }).observe($('term'));
+}
+
+function sendRaw(data) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'input', data }));
+  }
 }
 
 function setConn(state) {
   const el = $('conn');
-  el.className = 'pill' + (state === 'live' ? ' live' : state === 'dead' ? ' dead' : '');
-  el.textContent = state === 'live' ? 'attached' : state === 'dead' ? 'detached' : 'idle';
+  el.className = 'status' + (state === 'live' ? ' live' : state === 'dead' ? ' dead' : '');
+  el.textContent = state === 'live' ? 'connected' : state === 'dead' ? 'disconnected' : 'idle';
+  $('send').disabled = state !== 'live';
 }
 
 function attach(sess) {
   if (ws) { try { ws.close(); } catch (_) {} ws = null; }
   current = sess;
   $('empty').style.display = 'none';
-  $('term').style.display = '';
-  $('curName').textContent = sess.name;
+  $('termWrap').style.display = '';
+  $('composerWrap').style.display = '';
+  $('curName').textContent = sess.label || sess.name;
   $('curCwd').textContent = sess.cwd || '';
   term.clear();
   try { fit.fit(); } catch (_) {}
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const url = `${proto}://${location.host}/ws?session=${encodeURIComponent(sess.name)}`
-            + `&cols=${term.cols}&rows=${term.rows}`;
-  ws = new WebSocket(url);
-  ws.onopen = () => { setConn('live'); term.focus(); };
+  ws = new WebSocket(`${proto}://${location.host}/ws?session=${encodeURIComponent(sess.name)}`
+    + `&cols=${term.cols}&rows=${term.rows}`);
+  ws.onopen = () => { setConn('live'); $('input').focus(); };
   ws.onmessage = (ev) => term.write(ev.data);
   ws.onclose = () => setConn('dead');
   ws.onerror = () => setConn('dead');
   render();
 }
 
+/* ─────────── composer ─────────── */
+function wireComposer() {
+  const ta = $('input');
+
+  const autogrow = () => {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 200) + 'px';
+  };
+  ta.addEventListener('input', autogrow);
+
+  const submit = () => {
+    const text = ta.value;
+    if (!text.trim() || !ws || ws.readyState !== WebSocket.OPEN) return;
+    // Multi-line input goes through as-is, then a single Enter to submit —
+    // matching how you would paste into the terminal by hand.
+    sendRaw(text.replace(/\n/g, '\r') + '\r');
+    ta.value = '';
+    autogrow();
+  };
+
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+  });
+  $('send').addEventListener('click', submit);
+
+  // Control keys a textarea cannot express, but a terminal session needs.
+  const SEQ = { ctrlc: '\x03', esc: '\x1b', tab: '\t', up: '\x1b[A' };
+  $('keys').addEventListener('click', (e) => {
+    const k = e.target.dataset.key;
+    if (!k) return;
+    sendRaw(SEQ[k] || '');
+    ta.focus();
+  });
+}
+
+/* ─────────── sessions ─────────── */
 async function refresh() {
   try {
     const r = await fetch('/api/sessions?preview=1');
@@ -77,50 +122,50 @@ async function refresh() {
     $('host').textContent = j.host || '';
     window._sessions = j.sessions || [];
     render();
-  } catch (_) { /* server restart — next tick will retry */ }
+  } catch (_) { /* server restarting — next tick retries */ }
 }
 
 function render() {
   const list = $('list');
   const sessions = window._sessions || [];
   if (!sessions.length) {
-    list.innerHTML = '<div style="color:#8b93a3;font-size:12px;padding:12px">'
-      + 'No screen sessions.<br><br>Create one below, or start one from a shell:'
-      + '<br><code style="font-size:11px">screen -S mine bash</code></div>';
+    list.innerHTML = '<div style="color:var(--dim);font-size:12px;padding:12px 11px">'
+      + 'No sessions yet.</div>';
     return;
   }
   list.innerHTML = '';
   for (const s of sessions) {
     const el = document.createElement('div');
-    el.className = 'sess' + (current && current.name === s.name ? ' active' : '');
-    const shortCmd = s.dead ? 'dead — process gone, socket left behind'
-      : (s.command ? s.command.replace(/^\/\S+\//, '') : '—');
-    const killBtn = s.self
-      ? '<span class="kill self" title="This session hosts the server — killing it would stop Screendeck">server</span>'
-      : `<button class="kill" data-kill="${s.name}">kill</button>`;
-    const dotCls = s.dead ? 'dead' : s.active ? 'active' : s.attached ? 'attached' : '';
-    const preview = (s.preview && s.preview.length)
-      ? `<div class="preview">${s.preview.map(esc).join('<br>')}</div>` : '';
+    el.className = 'conv' + (current && current.name === s.name ? ' active' : '');
+    const dot = s.dead ? 'dead' : s.active ? 'active' : s.attached ? 'attached' : '';
+    // Prefer the live screen contents; fall back to the running command.
+    const sub = s.dead ? 'dead — process gone'
+      : (s.preview && s.preview.length ? s.preview[s.preview.length - 1]
+        : (s.command || ''));
     el.innerHTML = `
-      ${killBtn}
-      <div class="row1">
-        <span class="dot ${dotCls}" title="${esc(s.state || '')}${s.active ? ' — producing output' : ''}"></span>
-        <span class="name" data-rename="${esc(s.name)}" title="click to rename">${esc(s.label || s.name)}</span>
+      <div class="conv-actions">
+        <button class="iconbtn" data-rename="${esc(s.name)}" title="Rename">&#9998;</button>
+        ${s.self
+          ? '<button class="iconbtn" disabled title="This session hosts the server">&#9635;</button>'
+          : `<button class="iconbtn danger" data-kill="${esc(s.name)}" title="Delete">&#10005;</button>`}
       </div>
-      <div class="cmd">${esc(shortCmd)}</div>
-      ${preview}
-      <div class="meta">${esc(s.cwd || '')}<br>${esc(s.created)}</div>`;
+      <div class="conv-row">
+        <span class="dot ${dot}" title="${esc(s.state || '')}${s.active ? ' — producing output' : ''}"></span>
+        <span class="conv-title">${esc(s.label || s.name)}</span>
+      </div>
+      <div class="conv-sub">${esc(sub).slice(0, 200)}</div>`;
     el.addEventListener('click', (ev) => {
-      if (ev.target.dataset.kill) return;
+      if (ev.target.closest('.conv-actions')) return;
       attach(s);
     });
     list.appendChild(el);
   }
-  list.querySelectorAll('[data-rename]').forEach((n) => {
-    n.addEventListener('click', async (ev) => {
+
+  list.querySelectorAll('[data-rename]').forEach((b) => {
+    b.addEventListener('click', async (ev) => {
       ev.stopPropagation();
-      const full = n.dataset.rename;
-      const cur = n.textContent;
+      const full = b.dataset.rename;
+      const cur = (window._sessions.find((x) => x.name === full) || {}).label || '';
       const next = prompt('Rename session\n\n(letters, digits, . _ - only)', cur);
       if (!next || next === cur) return;
       const r = await fetch('/api/sessions/' + encodeURIComponent(full), {
@@ -130,8 +175,7 @@ function render() {
       });
       const j = await r.json();
       if (j.error) { alert('Rename failed: ' + j.error); return; }
-      // the attached socket still points at the old name; re-attach if it was current
-      if (current && current.name === full) { current = { ...current, name: j.name }; }
+      if (current && current.name === full) current = { ...current, name: j.name, label: next };
       refresh();
     });
   });
@@ -140,13 +184,15 @@ function render() {
     b.addEventListener('click', async (ev) => {
       ev.stopPropagation();
       const name = b.dataset.kill;
-      if (!confirm(`Kill session ${name}?\n\nThe process running inside it will be terminated.`)) return;
+      if (!confirm(`Delete session ${name}?\n\nThe process running inside it will be terminated.`)) return;
       await fetch('/api/sessions/' + encodeURIComponent(name), { method: 'DELETE' });
       if (current && current.name === name) {
         current = null;
-        $('curName').textContent = 'no session selected';
+        $('curName').textContent = 'Screendeck';
         $('curCwd').textContent = '';
         $('empty').style.display = '';
+        $('termWrap').style.display = 'none';
+        $('composerWrap').style.display = 'none';
         setConn('idle');
       }
       refresh();
@@ -154,7 +200,7 @@ function render() {
   });
 }
 
-/* ---------- new-session modal ---------- */
+/* ─────────── new-session modal ─────────── */
 async function loadDirs(p) {
   const r = await fetch('/api/dirs' + (p ? '?path=' + encodeURIComponent(p) : ''));
   const j = await r.json();
@@ -181,36 +227,40 @@ function wireModal() {
     if (e.target === $('modal')) $('modal').classList.remove('open');
   });
   $('mCreate').onclick = async () => {
-    const body = {
-      name: $('mName').value.trim(),
-      dir: $('mDir').value.trim(),
-      command: $('mCommand').value.trim(),
-    };
     const btn = $('mCreate');
-    btn.disabled = true; btn.textContent = 'Creating…';
+    btn.disabled = true;
     try {
       const r = await fetch('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          name: $('mName').value.trim(),
+          dir: $('mDir').value.trim(),
+          command: $('mCommand').value.trim(),
+        }),
       });
       const j = await r.json();
       if (j.error) { alert('Failed: ' + j.error); return; }
       $('modal').classList.remove('open');
       $('mCommand').value = '';
       await refresh();
-      // screen needs a moment to register before -x will attach
+      // screen needs a beat to register before -x can attach
       setTimeout(() => {
         const s = (window._sessions || []).find((x) => x.name.includes(j.session));
         if (s) attach(s);
       }, 700);
-    } finally {
-      btn.disabled = false; btn.textContent = 'Create';
-    }
+    } finally { btn.disabled = false; }
   };
 }
 
+$('hamb').onclick = () => {
+  $('side').classList.toggle('hidden');
+  setTimeout(() => { try { fit.fit(); } catch (_) {} }, 220);
+};
+
 initTerm();
+wireComposer();
 wireModal();
+setConn('idle');
 refresh();
 setInterval(refresh, 5000);
