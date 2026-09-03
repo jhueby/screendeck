@@ -18,6 +18,13 @@ let term, fit, ws, current = null;
 let dragging = null, suspendRefresh = false;
 let autoCopy = localStorage.getItem('sd-autocopy') === '1';
 
+// A session that was producing output and has since gone quiet has likely
+// finished a task and is sitting at a prompt again — flag it until it's
+// opened. Keyed off the active->idle transition, not "idle" alone, so a
+// session that was never touched doesn't light up on first load.
+let needsAttention = new Set();
+let prevActive = new Map();
+
 /* ─────────── terminal ─────────── */
 function initTerm() {
   term = new Terminal({
@@ -64,13 +71,17 @@ function setConn(state) {
 
 function attach(sess) {
   if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+  needsAttention.delete(sess.name);
   current = sess;
   $('empty').style.display = 'none';
   $('termWrap').style.display = '';
   $('composerWrap').style.display = '';
   $('curName').textContent = sess.label || sess.name;
   $('curCwd').textContent = sess.cwd || '';
-  term.clear();
+  // A full reset, not just clear() — clear() only wipes the screen buffer.
+  // Terminal modes (e.g. mouse tracking) set by a previous session's program
+  // survive clear() and would otherwise leak into whatever is attached next.
+  term.reset();
   try { fit.fit(); } catch (_) {}
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -229,7 +240,14 @@ async function refresh() {
     const r = await fetch('/api/sessions?preview=1');
     const j = await r.json();
     $('host').textContent = j.host || '';
-    window._sessions = j.sessions || [];
+    const sessions = j.sessions || [];
+    for (const s of sessions) {
+      const wasActive = prevActive.get(s.name);
+      const isOpen = current && current.name === s.name;
+      if (wasActive === true && !s.active && !s.dead && !isOpen) needsAttention.add(s.name);
+      prevActive.set(s.name, !!s.active);
+    }
+    window._sessions = sessions;
     render();
   } catch (_) { /* server restarting — next tick retries */ }
 }
@@ -244,11 +262,12 @@ function render() {
   }
   list.innerHTML = '';
   for (const s of sessions) {
+    const attn = needsAttention.has(s.name);
     const el = document.createElement('div');
-    el.className = 'conv' + (current && current.name === s.name ? ' active' : '');
+    el.className = 'conv' + (current && current.name === s.name ? ' active' : '') + (attn ? ' needs-attn' : '');
     el.draggable = true;
     el.dataset.name = s.name;
-    const dot = s.dead ? 'dead' : s.active ? 'active' : s.attached ? 'attached' : '';
+    const dot = s.dead ? 'dead' : s.active ? 'active' : attn ? 'waiting' : s.attached ? 'attached' : '';
     // Prefer the live screen contents; fall back to the running command.
     const sub = s.dead ? 'dead — process gone'
       : (s.preview && s.preview.length ? s.preview[s.preview.length - 1]
@@ -261,14 +280,16 @@ function render() {
           : `<button class="iconbtn danger" data-kill="${esc(s.name)}" title="Delete">&#10005;</button>`}
       </div>
       <div class="conv-row">
-        <span class="dot ${dot}" title="${esc(s.state || '')}${s.active ? ' — producing output' : ''}"></span>
+        <span class="dot ${dot}" title="${esc(s.state || '')}${s.active ? ' — producing output' : attn ? ' — ready for input' : ''}"></span>
         <span class="conv-title">${esc(s.label || s.name)}</span>
+        ${attn ? '<span class="attn-badge" title="Ready for input">&#9679;</span>' : ''}
       </div>
       <div class="conv-sub">${esc(sub).slice(0, 200)}</div>`;
     el.addEventListener('click', (ev) => {
       if (ev.target.closest('.conv-actions')) return;
       // A drag ends with a click event on some browsers; ignore it.
       if (el.dataset.justDragged) { delete el.dataset.justDragged; return; }
+      needsAttention.delete(s.name);
       attach(s);
     });
 
@@ -312,6 +333,10 @@ function render() {
     list.appendChild(el);
   }
 
+  // The sidebar can be hidden (mobile, or toggled off), so the hamburger
+  // itself carries a badge too — otherwise a waiting session is invisible.
+  $('hamb').classList.toggle('has-attn', needsAttention.size > 0);
+
   list.querySelectorAll('[data-rename]').forEach((b) => {
     b.addEventListener('click', async (ev) => {
       ev.stopPropagation();
@@ -337,6 +362,7 @@ function render() {
       const name = b.dataset.kill;
       if (!confirm(`Delete session ${name}?\n\nThe process running inside it will be terminated.`)) return;
       await fetch('/api/sessions/' + encodeURIComponent(name), { method: 'DELETE' });
+      needsAttention.delete(name);
       if (current && current.name === name) {
         current = null;
         $('curName').textContent = 'Screendeck';
@@ -379,6 +405,22 @@ async function loadDirs(p) {
   up.textContent = '../';
   up.onclick = () => loadDirs(j.parent);
   box.appendChild(up);
+  const mk = document.createElement('div');
+  mk.textContent = '+ New folder…';
+  mk.style.color = 'var(--accent)';
+  mk.onclick = async () => {
+    const name = prompt('New folder name (created inside ' + j.path + ')');
+    if (!name) return;
+    const r2 = await fetch('/api/dirs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: j.path, name }),
+    });
+    const j2 = await r2.json();
+    if (j2.error) { alert('Could not create folder: ' + j2.error); return; }
+    loadDirs(j2.path);
+  };
+  box.appendChild(mk);
   for (const d of j.dirs) {
     const el = document.createElement('div');
     el.textContent = d.replace(j.path.replace(/\/$/, '') + '/', '  ');
@@ -404,12 +446,14 @@ function wireModal() {
           name: $('mName').value.trim(),
           dir: $('mDir').value.trim(),
           command: $('mCommand').value.trim(),
+          resume: $('mResume').checked,
         }),
       });
       const j = await r.json();
       if (j.error) { alert('Failed: ' + j.error); return; }
       $('modal').classList.remove('open');
       $('mCommand').value = '';
+      $('mResume').checked = false;
       await refresh();
       // screen needs a beat to register before -x can attach
       setTimeout(() => {
@@ -420,8 +464,56 @@ function wireModal() {
   };
 }
 
+/* ─────────── usage tracker ─────────── */
+function levelClass(u) { return u >= 0.9 ? 'bad' : u >= 0.7 ? 'warn' : ''; }
+function fmtResets(ts) {
+  if (!ts) return '';
+  const ms = ts * 1000 - Date.now();
+  if (ms <= 0) return 'resetting…';
+  const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+  return `resets in ${h > 0 ? h + 'h ' : ''}${m}m`;
+}
+function fmtClock(ts) {
+  if (!ts) return '';
+  return new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+function renderUsage(state) {
+  const rows = [['uFill5h', 'uPct5h', state && state.five_hour], ['uFill7d', 'uPct7d', state && state.seven_day]];
+  for (const [fillId, pctId, w] of rows) {
+    const fill = $(fillId), pct = $(pctId);
+    if (!w) { fill.style.width = '0%'; fill.className = 'usage-fill'; pct.textContent = '—'; pct.title = ''; continue; }
+    fill.style.width = Math.min(100, Math.round(w.utilization * 100)) + '%';
+    fill.className = 'usage-fill ' + levelClass(w.utilization);
+    pct.textContent = Math.round(w.utilization * 100) + '%';
+    pct.title = fmtResets(w.resetsAt);
+  }
+  const fiveH = state && state.five_hour;
+  $('uEnd5h').textContent = fiveH ? `resets ${fmtClock(fiveH.resetsAt)} (${fmtResets(fiveH.resetsAt)})` : '';
+}
+async function refreshUsage() {
+  try {
+    const r = await fetch('/api/rate-limit');
+    const j = await r.json();
+    renderUsage(j.state);
+  } catch (_) {}
+}
+$('uRefresh').addEventListener('click', async () => {
+  const btn = $('uRefresh');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/rate-limit/refresh', { method: 'POST' });
+    const j = await r.json();
+    renderUsage(j.state);
+  } finally {
+    setTimeout(() => { btn.disabled = false; }, 60000);
+  }
+});
+
+// Sidebar collapsed state persists across reloads — same toggle, remembered.
+if (localStorage.getItem('sd-sidebar-hidden') === '1') $('side').classList.add('hidden');
 $('hamb').onclick = () => {
-  $('side').classList.toggle('hidden');
+  const hidden = $('side').classList.toggle('hidden');
+  localStorage.setItem('sd-sidebar-hidden', hidden ? '1' : '0');
   setTimeout(() => { try { fit.fit(); } catch (_) {} }, 220);
 };
 
@@ -432,3 +524,5 @@ wireModal();
 setConn('idle');
 refresh();
 setInterval(refresh, 5000);
+refreshUsage();
+setInterval(refreshUsage, 60000);

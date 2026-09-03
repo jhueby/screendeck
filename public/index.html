@@ -9,7 +9,7 @@
   :root{
     --bg:#0d0d0d; --side:#171717; --card:#1f1f1f; --line:#2a2a2a; --line2:#333;
     --fg:#ececec; --muted:#9a9a9a; --dim:#6f6f6f;
-    --accent:#4a9eff; --ok:#38c172; --bad:#e05f5f;
+    --accent:#4a9eff; --ok:#38c172; --bad:#e05f5f; --warn:#f5a623;
     --radius:12px;
   }
   *{box-sizing:border-box}
@@ -53,8 +53,12 @@
   .dot{width:7px;height:7px;border-radius:50%;flex:0 0 7px;background:var(--dim)}
   .dot.attached{background:var(--ok)}
   .dot.active{background:var(--accent);animation:pulse 1.4s ease-in-out infinite}
+  .dot.waiting{background:var(--warn);animation:pulse 1.4s ease-in-out infinite}
   .dot.dead{background:var(--bad)}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  .conv.needs-attn{box-shadow:inset 3px 0 0 0 var(--warn)}
+  .conv.needs-attn.active{box-shadow:inset 3px 0 0 0 var(--warn)}
+  .attn-badge{color:var(--warn);font-size:8px;line-height:1}
   .conv-title{flex:1;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .conv-sub{
     font-size:11px;color:var(--dim);margin-top:3px;margin-left:15px;
@@ -72,6 +76,19 @@
   .iconbtn:hover{background:#3a3a3a;color:var(--fg)}
   .iconbtn.danger:hover{color:var(--bad)}
   .side-foot{padding:10px 16px;border-top:1px solid var(--line);color:var(--dim);font-size:11px}
+  .usage-panel{margin-bottom:10px}
+  .usage-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+  .usage-title{font-size:11px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px}
+  #uRefresh{font-size:13px;padding:2px 5px}
+  .usage-row{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+  .usage-row:last-child{margin-bottom:0}
+  .usage-end{font-size:10px;color:var(--dim);margin:-2px 0 7px 24px}
+  .usage-label{width:16px;flex:0 0 16px;font-size:10.5px;color:var(--dim);font-weight:600}
+  .usage-bar{flex:1;height:6px;background:#2a2a2a;border-radius:999px;overflow:hidden}
+  .usage-fill{height:100%;width:0%;background:var(--ok);border-radius:999px;transition:width .3s}
+  .usage-fill.warn{background:var(--warn)}
+  .usage-fill.bad{background:var(--bad)}
+  .usage-pct{width:30px;flex:0 0 30px;text-align:right;font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
 
   /* ─────────── main ─────────── */
   main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
@@ -79,8 +96,12 @@
     display:flex;align-items:center;gap:10px;padding:11px 16px;
     border-bottom:1px solid var(--line);background:var(--bg);
   }
-  .hamb{background:none;border:0;color:var(--muted);cursor:pointer;padding:4px;border-radius:6px}
+  .hamb{background:none;border:0;color:var(--muted);cursor:pointer;padding:4px;border-radius:6px;position:relative}
   .hamb:hover{background:var(--card);color:var(--fg)}
+  .hamb.has-attn::after{
+    content:'';position:absolute;top:1px;right:1px;width:8px;height:8px;border-radius:50%;
+    background:var(--warn);box-shadow:0 0 0 2px var(--bg);
+  }
   .topname{font-weight:600;font-size:14px;white-space:nowrap}
   .topsub{color:var(--dim);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .status{
@@ -172,7 +193,26 @@
   </div>
   <div class="side-label">Sessions</div>
   <div class="list" id="list"></div>
-  <div class="side-foot"><span id="host">—</span></div>
+  <div class="side-foot">
+    <div class="usage-panel">
+      <div class="usage-head">
+        <span class="usage-title">Usage</span>
+        <button class="iconbtn" id="uRefresh" title="Check now — uses a small amount of quota">&#8635;</button>
+      </div>
+      <div class="usage-row">
+        <span class="usage-label">5h</span>
+        <div class="usage-bar"><div class="usage-fill" id="uFill5h"></div></div>
+        <span class="usage-pct" id="uPct5h" title="">—</span>
+      </div>
+      <div class="usage-end" id="uEnd5h"></div>
+      <div class="usage-row">
+        <span class="usage-label">7d</span>
+        <div class="usage-bar"><div class="usage-fill" id="uFill7d"></div></div>
+        <span class="usage-pct" id="uPct7d" title="">—</span>
+      </div>
+    </div>
+    <span id="host">—</span>
+  </div>
 </aside>
 
 <main>
@@ -228,7 +268,11 @@
     <label>Working directory</label>
     <input type="text" id="mDir">
     <div class="dirlist" id="dirs"></div>
-    <label>Command <span style="color:var(--dim)">— blank runs the default</span></label>
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+      <input type="checkbox" id="mResume" style="margin:0">
+      Resume last Claude conversation in this directory
+    </label>
+    <label>Command <span style="color:var(--dim)">— blank runs the default, or resumes if checked above</span></label>
     <textarea class="f" id="mCommand" placeholder="e.g. npm run dev   |   htop   |   ./job.sh"></textarea>
     <div class="actions">
       <button id="mCancel">Cancel</button>
