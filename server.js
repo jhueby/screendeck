@@ -75,6 +75,18 @@ function saveOrder(order) {
   }
 }
 
+// Fork parentage: maps a forked session's custom name -> its parent's custom name,
+// so the UI can group forks under (and indented below) the session they branched
+// from. Keyed by custom name (stable across the pid prefix), like the launch store.
+const FORKS_FILE = process.env.FORKS_STATE_FILE || path.join(os.homedir(), '.screendeck-forks.json');
+function loadForks() {
+  try { return JSON.parse(fs.readFileSync(FORKS_FILE, 'utf8')) || {}; } catch (_) { return {}; }
+}
+function saveForks(f) {
+  try { fs.writeFileSync(FORKS_FILE, JSON.stringify(f, null, 2)); }
+  catch (e) { console.error('could not persist forks:', e.message); }
+}
+
 // What to relaunch a session with, keyed by its unprefixed (custom) name —
 // screen sessions do not survive a real reboot, so this is what boot recovery
 // replays. Kept separate from STATE_FILE: order is cosmetic, this is not.
@@ -306,6 +318,7 @@ async function sessionCommand(pid) {
 async function listSessions(withPreview = false) {
   const { stdout } = await sh('screen', ['-ls']);
   const host = os.hostname();
+  const forks = loadForks();
   const out = [];
   for (const line of stdout.split('\n')) {
     // "\t203304.pts-1.myhost\t(01/02/2026 11:43:42 PM)\t(Detached)"
@@ -328,6 +341,7 @@ async function listSessions(withPreview = false) {
       name: fullName,
       pid: Number(pid),
       label,
+      parent: forks[label] || null,   // custom name of the session this was forked from
       created,
       attached: /Attached/i.test(state),
       dead: /Dead/i.test(state),
@@ -572,6 +586,8 @@ app.delete('/api/sessions/:name', async (req, res) => {
   const launches = loadLaunches();
   const key = customPart(req.params.name);
   if (launches[key]) { delete launches[key]; saveLaunches(launches); }
+  const forks = loadForks();
+  if (forks[key]) { delete forks[key]; saveForks(forks); }   // drop parentage record
   res.json({ ok: true });
 });
 
@@ -599,8 +615,13 @@ app.post('/api/sessions/:name/fork', async (req, res) => {
   const id = newestConversationId(cwd);
   if (!id) return res.status(404).json({ error: 'no Claude conversation found for this session to fork' });
   const forkCmd = `claude --resume ${shellQuote(id)} --fork-session`;
-  const base = (customPart(src) || 'session').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) || 'session';
-  const sessionName = `${SESSION_PREFIX}${base}-fork-${Date.now().toString(36)}`;
+  // Keep the parent's name and append "-Forked" (screen names can't hold spaces;
+  // the UI displays it as "<parent> Forked"). Ensure it's unique among live names.
+  const parentCustom = customPart(src);
+  const cleanParent = (parentCustom || 'session').replace(/[^A-Za-z0-9._-]/g, '').slice(0, 40) || 'session';
+  let sessionName = `${cleanParent}-Forked`;
+  const liveLabels = new Set((await listSessions(false)).map((s) => s.label));
+  if (liveLabels.has(sessionName)) sessionName = `${sessionName}-${Date.now().toString(36).slice(-3)}`;
   const { err, stderr } = await sh(
     'screen',
     ['-dmS', sessionName, '-c', path.join(__dirname, 'screenrc'), 'bash', '-lc', forkCmd],
@@ -610,7 +631,10 @@ app.post('/api/sessions/:name/fork', async (req, res) => {
   const launches = loadLaunches();
   launches[sessionName] = { cwd, command: forkCmd };
   saveLaunches(launches);
-  res.json({ ok: true, session: sessionName, cwd, forkedFrom: id });
+  const forks = loadForks();
+  forks[sessionName] = parentCustom;   // remember parentage for grouping/indent
+  saveForks(forks);
+  res.json({ ok: true, session: sessionName, cwd, forkedFrom: id, parent: parentCustom });
 });
 
 // ─────────── Claude Code skills ───────────

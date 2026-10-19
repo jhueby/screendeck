@@ -257,9 +257,32 @@ async function refresh() {
   } catch (_) { /* server restarting — next tick retries */ }
 }
 
+// Order sessions so each fork sits directly below its parent, with a depth for
+// indentation. Roots keep their existing (user) order; children follow their parent.
+function groupForks(sessions) {
+  const byLabel = new Map(sessions.map((s) => [s.label, s]));
+  const children = new Map();
+  const roots = [];
+  for (const s of sessions) {
+    if (s.parent && s.parent !== s.label && byLabel.has(s.parent)) {
+      if (!children.has(s.parent)) children.set(s.parent, []);
+      children.get(s.parent).push(s);
+    } else roots.push(s);
+  }
+  const out = [];
+  const visit = (s, depth) => {
+    s._depth = depth;
+    out.push(s);
+    for (const c of (children.get(s.label) || [])) visit(c, depth + 1);
+  };
+  roots.forEach((s) => visit(s, 0));
+  for (const s of sessions) if (!out.includes(s)) { s._depth = 0; out.push(s); } // orphans/cycles
+  return out;
+}
+
 function render() {
   const list = $('list');
-  const sessions = window._sessions || [];
+  const sessions = groupForks(window._sessions || []);
   if (!sessions.length) {
     list.innerHTML = '<div style="color:var(--dim);font-size:12px;padding:12px 11px">'
       + 'No sessions yet.</div>';
@@ -272,6 +295,9 @@ function render() {
     el.className = 'conv' + (current && current.name === s.name ? ' active' : '') + (attn ? ' needs-attn' : '');
     el.draggable = true;
     el.dataset.name = s.name;
+    if (s._depth) { el.classList.add('forked'); el.style.marginLeft = (s._depth * 16) + 'px'; }
+    // Forked sessions keep the parent's name + "Forked" (stored as "<parent>-Forked").
+    const title = (s.label || s.name).replace(/-Forked/g, ' Forked');
     const dot = s.dead ? 'dead' : s.active ? 'active' : attn ? 'waiting' : s.attached ? 'attached' : '';
     // Prefer the live screen contents; fall back to the running command.
     const sub = s.dead ? 'dead — process gone'
@@ -287,7 +313,7 @@ function render() {
       </div>
       <div class="conv-row">
         <span class="dot ${dot}" title="${esc(s.state || '')}${s.active ? ' — producing output' : attn ? ' — ready for input' : ''}"></span>
-        <span class="conv-title">${esc(s.label || s.name)}</span>
+        <span class="conv-title">${esc(title)}</span>
         ${attn ? '<span class="attn-badge" title="Ready for input">&#9679;</span>' : ''}
       </div>
       <div class="conv-sub">${esc(sub).slice(0, 200)}</div>`;

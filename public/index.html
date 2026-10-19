@@ -45,6 +45,8 @@
   .conv{position:relative;padding:9px 11px;border-radius:10px;cursor:pointer;margin-bottom:2px}
   .conv:hover{background:var(--card)}
   .conv.active{background:#2a2a2a}
+  .conv.forked{box-shadow:inset 2px 0 0 0 var(--line2)}
+  .conv.forked.active{box-shadow:inset 2px 0 0 0 var(--accent)}
   .conv[draggable=true]{user-select:none}
   .conv.drag-src{opacity:.4}
   .conv.drop-before{box-shadow:inset 0 2px 0 0 var(--accent)}
@@ -382,6 +384,6 @@
 
 <script src="/vendor/xterm.js"></script>
 <script src="/vendor/addon-fit.js"></script>
-<script src="/app.js?v=20261019d"></script>
+<script src="/app.js?v=20261019e"></script>
 </body>
 </html>
