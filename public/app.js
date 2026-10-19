@@ -96,6 +96,22 @@ function attach(sess) {
   ws.onmessage = (ev) => term.write(ev.data);
   ws.onclose = () => setConn('dead');
   ws.onerror = () => setConn('dead');
+  const x = $('paneClose'); if (x) x.style.display = '';
+  render();
+}
+
+// Close the open terminal pane (deselect back to the empty state) — does NOT kill
+// the session; it keeps running and can be reopened from the sidebar.
+function closePane() {
+  if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+  current = null;
+  $('empty').style.display = '';
+  $('termWrap').style.display = 'none';
+  $('composerWrap').style.display = 'none';
+  $('curName').textContent = 'Screendeck';
+  $('curCwd').textContent = '';
+  const x = $('paneClose'); if (x) x.style.display = 'none';
+  setConn('idle');
   render();
 }
 
@@ -414,15 +430,7 @@ function render() {
       if (!confirm(`Delete session ${name}?\n\nThe process running inside it will be terminated.`)) return;
       await fetch('/api/sessions/' + encodeURIComponent(name), { method: 'DELETE' });
       needsAttention.delete(name);
-      if (current && current.name === name) {
-        current = null;
-        $('curName').textContent = 'Screendeck';
-        $('curCwd').textContent = '';
-        $('empty').style.display = '';
-        $('termWrap').style.display = 'none';
-        $('composerWrap').style.display = 'none';
-        setConn('idle');
-      }
+      if (current && current.name === name) closePane();
       refresh();
     });
   });
@@ -811,6 +819,7 @@ wireModal();
 wireSkills();
 // corner × on each pop-up panel closes it
 document.querySelectorAll('.xclose').forEach((b) => { b.onclick = () => b.closest('.modal').classList.remove('open'); });
+$('paneClose').onclick = closePane;   // × on the terminal pane
 setConn('idle');
 refresh();
 setInterval(refresh, 5000);
