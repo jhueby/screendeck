@@ -817,9 +817,16 @@ wireClipboard();
 wireComposer();
 wireModal();
 wireSkills();
-// corner × on each pop-up panel closes it
-document.querySelectorAll('.xclose').forEach((b) => { b.onclick = () => b.closest('.modal').classList.remove('open'); });
-$('paneClose').onclick = closePane;   // × on the terminal pane
+// Close buttons via event delegation on document — robust to load timing and any
+// re-render: the corner × on a pop-up panel closes its modal; the top-bar × closes
+// the terminal pane.
+document.addEventListener('click', (e) => {
+  const t = e.target;
+  if (!t || !t.closest) return;
+  const xc = t.closest('.xclose');
+  if (xc) { const m = xc.closest('.modal'); if (m) m.classList.remove('open'); return; }
+  if (t.closest('#paneClose')) closePane();
+});
 setConn('idle');
 refresh();
 setInterval(refresh, 5000);
