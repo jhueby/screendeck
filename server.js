@@ -800,7 +800,8 @@ app.get('/api/conversations', (req, res) => {
 
 // ─────────── Ollama engine ───────────
 // Two Ollama hosts on the homelab (.21, .22); either can be picked per session.
-const OLLAMA_HOSTS = (process.env.OLLAMA_HOSTS || 'http://192.168.1.21:11434,http://192.168.1.22:11434')
+// .22 (aiserver, RX 6800 16 GB) first = default host; .21 still selectable.
+const OLLAMA_HOSTS = (process.env.OLLAMA_HOSTS || 'http://192.168.1.22:11434,http://192.168.1.21:11434')
   .split(',').map((s) => s.trim()).filter(Boolean);
 
 // aider gives Ollama models an agentic (file-editing, git) coding loop. It lives

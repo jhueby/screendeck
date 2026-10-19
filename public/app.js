@@ -581,6 +581,9 @@ async function loadOllama(host) {
   for (const m of j.models) {
     const o = document.createElement('option'); o.value = m; o.textContent = m; modelSel.appendChild(o);
   }
+  // Default to the benchmark pick: qwen2.5-coder:7b (best accuracy/speed for agentic editing)
+  const preferred = 'qwen2.5-coder:7b';
+  if (j.models.includes(preferred)) modelSel.value = preferred;
 }
 
 function setOllamaMode(mode) {
