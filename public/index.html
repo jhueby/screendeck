@@ -292,7 +292,7 @@
     <span class="topname" id="curName">Screendeck</span>
     <span class="topsub" id="curCwd"></span>
     <span class="status" id="conn">idle</span>
-    <button class="paneclose" id="paneClose" title="Close pane (keeps the session running)" aria-label="Close pane" style="display:none">&times;</button>
+    <button type="button" class="paneclose" id="paneClose" title="Close pane (keeps the session running)" aria-label="Close pane" style="display:none" onclick="closePane()">&times;</button>
   </div>
 
   <div class="stage" id="stage">
@@ -331,7 +331,7 @@
 
 <div class="modal" id="modal">
   <div class="card">
-    <button class="xclose" id="mClose" title="Close" aria-label="Close">&times;</button>
+    <button type="button" class="xclose" id="mClose" title="Close" aria-label="Close" onclick="this.closest('.modal').classList.remove('open')">&times;</button>
     <h2>New session</h2>
     <div class="cardsub">Runs inside GNU screen, so it survives this tab closing.</div>
 
@@ -378,7 +378,7 @@
 
 <div class="modal" id="skillsModal">
   <div class="card" style="width:min(680px,100%)">
-    <button class="xclose" id="skillsX" title="Close" aria-label="Close">&times;</button>
+    <button type="button" class="xclose" id="skillsX" title="Close" aria-label="Close" onclick="this.closest('.modal').classList.remove('open')">&times;</button>
     <h2>Skills</h2>
     <div class="cardsub">Claude Code skills in <code>~/.claude/skills</code> — toggle on/off, inspect, and sync the hub.</div>
     <div class="hubrow" id="hubRow">
@@ -394,6 +394,6 @@
 
 <script src="/vendor/xterm.js"></script>
 <script src="/vendor/addon-fit.js"></script>
-<script src="/app.js?v=20261019i"></script>
+<script src="/app.js?v=20261019j"></script>
 </body>
 </html>
