@@ -69,6 +69,8 @@
     border-radius:7px;padding:2px;
   }
   .conv:hover .conv-actions,.conv.active .conv-actions{display:flex}
+  /* touch devices have no hover — keep the fork/rename/delete icons visible and tappable */
+  @media (hover:none){ .conv-actions{display:flex} .iconbtn{padding:6px 9px} .conv-title{padding-right:84px} }
   .iconbtn{
     background:none;border:0;color:var(--muted);cursor:pointer;padding:3px 6px;
     border-radius:5px;line-height:1;font-size:11.5px;
