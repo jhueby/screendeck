@@ -570,6 +570,15 @@ app.patch('/api/sessions/:name', async (req, res) => {
     delete launches[oldKey];
     saveLaunches(launches);
   }
+  // Keep fork parentage across the rename: move this session's own record (if it's
+  // a fork) and re-point any children that referenced its old name as their parent.
+  const forks = loadForks();
+  let forksChanged = false;
+  if (forks[oldKey]) { forks[clean] = forks[oldKey]; delete forks[oldKey]; forksChanged = true; }
+  for (const [child, parent] of Object.entries(forks)) {
+    if (parent === oldKey) { forks[child] = clean; forksChanged = true; }
+  }
+  if (forksChanged) saveForks(forks);
   res.json({ ok: true, name: newFull });
 });
 
