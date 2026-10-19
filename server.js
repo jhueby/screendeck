@@ -646,6 +646,30 @@ app.post('/api/sessions/:name/fork', async (req, res) => {
   res.json({ ok: true, session: sessionName, cwd, forkedFrom: id, parent: parentCustom });
 });
 
+// Upload a file / pasted screenshot into the session's working dir (under
+// .screendeck-uploads/) so the Claude Code session running there can read it.
+// express.raw handles this route only; the global express.json skips it because the
+// body arrives as octet-stream, not JSON.
+app.post('/api/sessions/:name/upload', express.raw({ type: () => true, limit: '25mb' }), async (req, res) => {
+  try {
+    if (!req.body || !req.body.length) return res.status(400).json({ error: 'empty upload' });
+    const pid = parseInt(req.params.name.split('.')[0], 10);
+    let cwd = pid ? await sessionCwd(pid) : null;
+    if (!cwd) { const l = loadLaunches()[customPart(req.params.name)]; cwd = l && l.cwd; }
+    if (!cwd || !fs.existsSync(cwd)) return res.status(400).json({ error: 'session directory not found' });
+    let name = path.basename(String(req.query.name || 'upload.bin')).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80) || 'upload.bin';
+    const dir = path.join(cwd, '.screendeck-uploads');
+    fs.mkdirSync(dir, { recursive: true });
+    let dest = path.join(dir, name);
+    if (fs.existsSync(dest)) {
+      const ext = path.extname(name); const base = ext ? name.slice(0, -ext.length) : name;
+      name = `${base}-${Date.now().toString(36)}${ext}`; dest = path.join(dir, name);
+    }
+    fs.writeFileSync(dest, req.body);
+    res.json({ ok: true, path: dest, rel: path.posix.join('.screendeck-uploads', name), bytes: req.body.length });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
 // ─────────── Claude Code skills ───────────
 // Skills are directories under ~/.claude/skills each holding a SKILL.md. Claude
 // Code discovers them by presence, so "disable" = move the dir into .disabled/

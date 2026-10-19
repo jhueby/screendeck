@@ -148,6 +148,9 @@
     cursor:pointer;display:grid;place-items:center;
   }
   .send:disabled{background:#3a3a3a;color:#777;cursor:default}
+  .attach{flex:0 0 30px;height:30px;border-radius:8px;border:0;background:transparent;color:var(--muted);cursor:pointer;display:grid;place-items:center}
+  .attach:hover{color:var(--fg);background:#2a2a2a}
+  .attach-status{font-size:11px;color:var(--dim);margin-top:6px;text-align:center}
   .composer-hint{
     display:flex;gap:14px;justify-content:center;align-items:center;color:var(--dim);
     font-size:11px;margin-top:8px;flex-wrap:wrap;
@@ -311,11 +314,16 @@
 
   <div class="composer-wrap" id="composerWrap" style="display:none">
     <div class="composer">
+      <button type="button" class="attach" id="attachBtn" title="Attach a file or screenshot — saved into the session folder, path dropped in (you can also paste an image here)">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+      </button>
       <textarea id="input" rows="1" placeholder="Send a message…"></textarea>
       <button class="send" id="send" title="Send (Enter)">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
       </button>
     </div>
+    <input type="file" id="fileInput" multiple style="display:none">
+    <div class="attach-status" id="attachStatus" style="display:none"></div>
     <div class="composer-hint">
       <span><kbd>Enter</kbd> send</span>
       <span><kbd>Shift</kbd>+<kbd>Enter</kbd> newline</span>
@@ -398,6 +406,6 @@
 
 <script src="/vendor/xterm.js"></script>
 <script src="/vendor/addon-fit.js"></script>
-<script src="/app.js?v=20261019k"></script>
+<script src="/app.js?v=20261019l"></script>
 </body>
 </html>

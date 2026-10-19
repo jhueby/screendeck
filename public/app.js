@@ -220,6 +220,26 @@ function wireClipboard() {
 }
 
 /* ─────────── composer ─────────── */
+// Upload a file / pasted image into the open session's folder; drop its path into
+// the composer so you can describe it and send it to Claude.
+async function uploadFile(file) {
+  if (!current) { alert('Open a session first to attach a file.'); return; }
+  const name = file.name || ('pasted-' + Date.now() + '.png');
+  const st = $('attachStatus');
+  if (st) { st.style.display = ''; st.textContent = 'uploading ' + name + '…'; }
+  try {
+    const r = await fetch('/api/sessions/' + encodeURIComponent(current.name) + '/upload?name=' + encodeURIComponent(name),
+      { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+    const j = await r.json();
+    if (j.error) { if (st) st.textContent = '✗ ' + j.error; return; }
+    const ta = $('input');
+    ta.value = ta.value + (ta.value && !/\s$/.test(ta.value) ? ' ' : '') + j.rel + ' ';
+    ta.dispatchEvent(new Event('input'));
+    ta.focus();
+    if (st) { st.textContent = '📎 ' + j.rel + ' (' + Math.round(j.bytes / 1024) + ' KB) — path added; describe it and press Enter'; setTimeout(() => { st.style.display = 'none'; }, 7000); }
+  } catch (e) { if (st) st.textContent = '✗ upload failed'; }
+}
+
 function wireComposer() {
   const ta = $('input');
 
@@ -243,6 +263,16 @@ function wireComposer() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
   });
   $('send').addEventListener('click', submit);
+
+  // Attach files / paste screenshots → upload into the session folder, path into composer.
+  $('attachBtn').onclick = () => $('fileInput').click();
+  $('fileInput').addEventListener('change', (e) => { for (const f of e.target.files) uploadFile(f); e.target.value = ''; });
+  ta.addEventListener('paste', (e) => {
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    for (const it of items) {
+      if (it.type && it.type.indexOf('image') === 0) { const f = it.getAsFile(); if (f) { e.preventDefault(); uploadFile(f); return; } }
+    }
+  });
 
   // Control keys a textarea cannot express, but a terminal session needs.
   const SEQ = { ctrlc: '\x03', esc: '\x1b', tab: '\t', up: '\x1b[A' };
