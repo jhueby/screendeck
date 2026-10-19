@@ -14,6 +14,8 @@
  *   SESSION_PREFIX   prefix for created sessions      (default sd-)
  *   DEFAULT_DIR      starting directory for new work  (default $HOME)
  *   WORKSPACE_ROOT   restrict the directory browser to this subtree (optional)
+ *   CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD
+ *                    Cloudflare Access app guarding the public hostname; see below
  *
  * SECURITY: this ships with no authentication. Anyone who can reach the port
  * gets an interactive shell as the user running this process. Bind it to a
@@ -26,6 +28,7 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const pty = require('node-pty');
 const { execFile } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -117,7 +120,51 @@ async function refreshRateLimit() {
   return null;
 }
 
+// Cloudflare Access gate. Requests that arrive through Cloudflare carry a
+// Cf-Ray header the edge sets and a client cannot strip, and Access adds a
+// signed Cf-Access-Jwt-Assertion once the user has logged in. Verifying that
+// token here means a missing or mis-scoped Access policy in the dashboard
+// fails closed instead of handing out a shell. Direct LAN requests (no Cf-Ray)
+// are untouched. Unset CF_ACCESS_AUD rejects all Cloudflare traffic.
+const CF_TEAM = (process.env.CF_ACCESS_TEAM_DOMAIN || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+const CF_AUD = process.env.CF_ACCESS_AUD || '';
+let cfKeys = new Map();
+let cfKeysAt = 0;
+
+async function cfKey(kid) {
+  if (!cfKeys.has(kid) && Date.now() - cfKeysAt > 60000) {
+    cfKeysAt = Date.now();
+    const r = await fetch(`https://${CF_TEAM}/cdn-cgi/access/certs`);
+    if (!r.ok) throw new Error(`access certs: HTTP ${r.status}`);
+    const { keys } = await r.json();
+    cfKeys = new Map(keys.map((k) => [k.kid, crypto.createPublicKey({ key: k, format: 'jwk' })]));
+  }
+  return cfKeys.get(kid);
+}
+
+async function cfAccessOk(req) {
+  if (!req.headers['cf-ray']) return true;
+  const token = req.headers['cf-access-jwt-assertion'];
+  if (!CF_TEAM || !CF_AUD || typeof token !== 'string') return false;
+  try {
+    const [h, p, sig] = token.split('.');
+    const header = JSON.parse(Buffer.from(h, 'base64url'));
+    const claims = JSON.parse(Buffer.from(p, 'base64url'));
+    if (header.alg !== 'RS256') return false;
+    const key = await cfKey(header.kid);
+    if (!key || !crypto.verify('RSA-SHA256', Buffer.from(`${h}.${p}`), key, Buffer.from(sig, 'base64url'))) return false;
+    const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+    return claims.iss === `https://${CF_TEAM}` && aud.includes(CF_AUD) && claims.exp * 1000 > Date.now();
+  } catch (e) {
+    console.error('access check failed:', e.message);
+    return false;
+  }
+}
+
 const app = express();
+app.use((req, res, next) => {
+  cfAccessOk(req).then((ok) => (ok ? next() : res.status(403).send('Forbidden')));
+});
 app.use(express.json({ limit: '64kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -491,7 +538,17 @@ app.delete('/api/sessions/:name', async (req, res) => {
 });
 
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws' });
+// The browser attaches its Access cookie to a cross-site WebSocket too, so a
+// foreign page could otherwise drive a terminal; only same-host origins attach.
+const wss = new WebSocketServer({
+  server, path: '/ws',
+  verifyClient: ({ req, origin }, done) => {
+    let sameHost = !origin;
+    try { sameHost = sameHost || new URL(origin).host === req.headers.host; } catch (_) {}
+    if (!sameHost) return done(false, 403);
+    cfAccessOk(req).then((ok) => done(ok, 403));
+  },
+});
 
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url, 'http://localhost');
@@ -545,6 +602,7 @@ server.listen(PORT, BIND, () => {
   console.log(`default command: ${DEFAULT_COMMAND}`);
   console.log(`default dir:     ${DEFAULT_DIR}${WORKSPACE_ROOT ? `  (restricted to ${WORKSPACE_ROOT})` : ''}`);
   console.log('NOTE: no authentication — bind to a trusted network or front it with a proxy.');
+  console.log(`cloudflare access: ${CF_TEAM && CF_AUD ? `required via ${CF_TEAM}` : 'not configured, Cloudflare traffic rejected'}`);
 });
 
 // Skip the immediate check if a cached reading is still fresh (e.g. a quick

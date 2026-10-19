@@ -30,6 +30,16 @@ Choose one:
 
 Do not expose it to the internet as-is.
 
+### Behind a Cloudflare Tunnel
+
+Any request that arrives through Cloudflare (it carries a `Cf-Ray` header) must
+also carry a valid Cloudflare Access token for the app named by
+`CF_ACCESS_TEAM_DOMAIN` + `CF_ACCESS_AUD`, checked against the team's signing
+keys. Without both variables set, all Cloudflare traffic gets 403. A mistake in
+the Access policy therefore fails closed rather than publishing a shell.
+WebSocket attaches must also come from a page on the same host. Direct
+(non-Cloudflare) requests are not affected.
+
 ## Run with Docker
 
 ```bash
@@ -85,6 +95,8 @@ All optional, via environment variables.
 | `WORKSPACE_ROOT` | *(unset)* | restrict the directory browser to this subtree |
 | `SESSION_PREFIX` | `sd-` | prefix for session names created here |
 | `STATE_FILE` | `~/.screendeck-order.json` | where the sidebar ordering is persisted |
+| `CF_ACCESS_TEAM_DOMAIN` | *(unset)* | Cloudflare Access team, e.g. `myteam.cloudflareaccess.com` |
+| `CF_ACCESS_AUD` | *(unset)* | Application Audience (AUD) tag of the Access app guarding the hostname |
 
 `DEFAULT_COMMAND` is what makes this general — point it at a shell, a REPL, a
 build watcher, a monitoring tool, or any long-running CLI.
