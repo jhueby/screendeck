@@ -171,6 +171,14 @@ app.use((req, res, next) => {
   cfAccessOk(req).then((ok) => (ok ? next() : res.status(403).send('Forbidden')));
 });
 app.use(express.json({ limit: '64kb' }));
+// Never cache the app shell (browser or CDN). Stale JS/HTML is how a deploy
+// silently "doesn't show up" for a remote user behind Cloudflare.
+app.use((req, res, next) => {
+  if (req.path === '/' || /\.(html|js|css)$/.test(req.path)) {
+    res.setHeader('Cache-Control', 'no-store, must-revalidate');
+  }
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/api/rate-limit', (_req, res) => res.json({ state: rateLimitState }));
