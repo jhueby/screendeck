@@ -282,6 +282,7 @@ function render() {
         : (s.command || ''));
     el.innerHTML = `
       <div class="conv-actions">
+        ${s.dead ? '' : `<button class="iconbtn" data-fork="${esc(s.name)}" title="Fork this conversation into a new session"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="18" r="2.6"/><circle cx="6" cy="6" r="2.6"/><circle cx="18" cy="6" r="2.6"/><path d="M6 8.6v6.8M18 8.6c0 4.5-6 2-6 6.8"/></svg></button>`}
         <button class="iconbtn" data-rename="${esc(s.name)}" title="Rename">&#9998;</button>
         ${s.self
           ? '<button class="iconbtn" disabled title="This session hosts the server">&#9635;</button>'
@@ -361,6 +362,25 @@ function render() {
       if (j.error) { alert('Rename failed: ' + j.error); return; }
       if (current && current.name === full) current = { ...current, name: j.name, label: next };
       refresh();
+    });
+  });
+
+  list.querySelectorAll('[data-fork]').forEach((b) => {
+    b.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const name = b.dataset.fork;
+      b.disabled = true;
+      try {
+        const r = await fetch('/api/sessions/' + encodeURIComponent(name) + '/fork', { method: 'POST' });
+        const j = await r.json();
+        if (j.error) { alert('Fork failed: ' + j.error); return; }
+        await refresh();
+        // attach to the new fork once screen has registered it
+        setTimeout(() => {
+          const s = (window._sessions || []).find((x) => x.name.includes(j.session));
+          if (s) attach(s);
+        }, 700);
+      } finally { b.disabled = false; }
     });
   });
 

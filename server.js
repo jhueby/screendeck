@@ -567,6 +567,44 @@ app.delete('/api/sessions/:name', async (req, res) => {
   res.json({ ok: true });
 });
 
+// Fork a running session's conversation into a new one. A live session is the
+// newest transcript in its own cwd, so forking the newest there branches the
+// right conversation (original keeps running, untouched).
+function newestConversationId(cwd) {
+  const pdir = projectDirFor(cwd);
+  let files;
+  try { files = fs.readdirSync(pdir).filter((f) => f.endsWith('.jsonl')); } catch (_) { return null; }
+  let best = null, bestM = 0;
+  for (const f of files) {
+    try { const m = fs.statSync(path.join(pdir, f)).mtimeMs; if (m > bestM) { bestM = m; best = f; } } catch (_) {}
+  }
+  return best ? best.replace(/\.jsonl$/, '') : null;
+}
+
+app.post('/api/sessions/:name/fork', async (req, res) => {
+  const src = req.params.name;
+  const pid = parseInt(src.split('.')[0], 10);
+  let cwd = pid ? await sessionCwd(pid) : null;
+  if (!cwd) { const l = loadLaunches()[customPart(src)]; cwd = l && l.cwd; }
+  cwd = cwd || DEFAULT_DIR;
+  if (!fs.existsSync(cwd)) return res.status(400).json({ error: `source directory missing: ${cwd}` });
+  const id = newestConversationId(cwd);
+  if (!id) return res.status(404).json({ error: 'no Claude conversation found for this session to fork' });
+  const forkCmd = `claude --resume ${shellQuote(id)} --fork-session`;
+  const base = (customPart(src) || 'session').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) || 'session';
+  const sessionName = `${SESSION_PREFIX}${base}-fork-${Date.now().toString(36)}`;
+  const { err, stderr } = await sh(
+    'screen',
+    ['-dmS', sessionName, '-c', path.join(__dirname, 'screenrc'), 'bash', '-lc', forkCmd],
+    { cwd }
+  );
+  if (err) return res.status(500).json({ error: stderr || String(err) });
+  const launches = loadLaunches();
+  launches[sessionName] = { cwd, command: forkCmd };
+  saveLaunches(launches);
+  res.json({ ok: true, session: sessionName, cwd, forkedFrom: id });
+});
+
 // ─────────── Claude Code skills ───────────
 // Skills are directories under ~/.claude/skills each holding a SKILL.md. Claude
 // Code discovers them by presence, so "disable" = move the dir into .disabled/
