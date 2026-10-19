@@ -832,15 +832,14 @@ wss.on('connection', (ws, req) => {
     env: { ...process.env, TERM: 'xterm-256color' },
   });
 
-  // The web terminal must never start mouse tracking: when a TUI (Claude Code)
-  // enables it, xterm.js reports every mouse move back, and those reports leak
-  // into the session as text ("4;22M5;22M…") — the mouse problem. Strip the
-  // enable sequences on the way out so xterm never turns mouse on, and strip any
-  // stray SGR mouse reports on the way in as defence in depth.
-  const stripMouseEnable = (s) => s.replace(/\x1b\[\?100[0-6]h/g, '');
-  const stripMouseReports = (s) => s.replace(/\x1b\[<\d+;\d+;\d+[Mm]/g, '');
+  // Claude Code's TUI (alt screen) enables mouse tracking so the wheel scrolls the
+  // chat — we must KEEP that (1000 basic + 1006 SGR) or the wheel degrades to arrow
+  // keys that hit the input history. But strip only the MOTION modes (1002 drag,
+  // 1003 any-motion): those flood mouse-move reports that leak into the session as
+  // text ("4;22M…"). Wheel and clicks are reported fine without motion tracking.
+  const stripMouseMotion = (s) => s.replace(/\x1b\[\?100[23]h/g, '');
 
-  term.onData((d) => { if (ws.readyState === ws.OPEN) ws.send(stripMouseEnable(d)); });
+  term.onData((d) => { if (ws.readyState === ws.OPEN) ws.send(stripMouseMotion(d)); });
   term.onExit(({ exitCode }) => {
     if (ws.readyState === ws.OPEN) {
       ws.send(`\r\n\x1b[33m[detached from ${session} (exit ${exitCode})]\x1b[0m\r\n`);
@@ -851,7 +850,7 @@ wss.on('connection', (ws, req) => {
   ws.on('message', (raw) => {
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
-    if (msg.type === 'input') term.write(stripMouseReports(msg.data));
+    if (msg.type === 'input') term.write(msg.data);   // pass wheel/click reports through
     else if (msg.type === 'resize') { try { term.resize(msg.cols, msg.rows); } catch (_) {} }
   });
 
