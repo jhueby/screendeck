@@ -43,6 +43,14 @@ function initTerm() {
   term.loadAddon(fit);
   term.open($('term'));
 
+  // Mouse wheel scrolls the terminal's own scrollback (the chat) instead of being
+  // converted to arrow keys that hit the app's input history. Returning false stops
+  // xterm's default wheel→keys conversion; we scroll the viewport ourselves.
+  term.attachCustomWheelEventHandler((e) => {
+    term.scrollLines(e.deltaY < 0 ? -3 : 3);
+    return false;
+  });
+
   // Typing directly into the terminal still works — the composer is additive.
   term.onData((d) => sendRaw(d));
 
