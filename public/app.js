@@ -809,6 +809,8 @@ wireClipboard();
 wireComposer();
 wireModal();
 wireSkills();
+// corner × on each pop-up panel closes it
+document.querySelectorAll('.xclose').forEach((b) => { b.onclick = () => b.closest('.modal').classList.remove('open'); });
 setConn('idle');
 refresh();
 setInterval(refresh, 5000);
