@@ -55,10 +55,23 @@ function initTerm() {
     try {
       fit.fit();
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+        ws.send(JSON.stringify({ type: 'resize', cols: reportCols(), rows: term.rows }));
       }
     } catch (_) {}
   }).observe($('term'));
+}
+
+// Single-column mode: cap the columns we REPORT to the pty so Claude Code (and other
+// wide TUIs) render one column — its side "changes" panel only appears above a width
+// threshold. The xterm window stays full size; Claude just uses the left COLCAP cols.
+const COLCAP = 100;
+function colcapOn() { try { return localStorage.getItem('sd-1col') === '1'; } catch (_) { return false; } }
+function reportCols() { return colcapOn() && term ? Math.min(term.cols, COLCAP) : (term ? term.cols : 80); }
+function setColcap(on) {
+  try { localStorage.setItem('sd-1col', on ? '1' : '0'); } catch (_) {}
+  const b = $('colBtn'); if (b) b.classList.toggle('on', on);
+  // push a resize now so the open session re-lays-out immediately
+  try { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'resize', cols: reportCols(), rows: term.rows })); } catch (_) {}
 }
 
 function sendRaw(data) {
@@ -91,7 +104,7 @@ function attach(sess) {
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws?session=${encodeURIComponent(sess.name)}`
-    + `&cols=${term.cols}&rows=${term.rows}`);
+    + `&cols=${reportCols()}&rows=${term.rows}`);
   ws.onopen = () => { setConn('live'); $('input').focus(); };
   ws.onmessage = (ev) => term.write(ev.data);
   ws.onclose = () => setConn('dead');
@@ -825,8 +838,10 @@ document.addEventListener('click', (e) => {
   if (!t || !t.closest) return;
   const xc = t.closest('.xclose');
   if (xc) { const m = xc.closest('.modal'); if (m) m.classList.remove('open'); return; }
-  if (t.closest('#paneClose')) closePane();
+  if (t.closest('#paneClose')) { closePane(); return; }
+  if (t.closest('#colBtn')) { setColcap(!colcapOn()); return; }
 });
+try { $('colBtn').classList.toggle('on', colcapOn()); } catch (_) {}
 setConn('idle');
 refresh();
 setInterval(refresh, 5000);

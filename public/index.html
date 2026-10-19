@@ -117,6 +117,9 @@
     width:28px;height:28px;border-radius:7px;cursor:pointer;display:grid;place-items:center;
   }
   .paneclose:hover{background:var(--card);color:var(--fg)}
+  .colbtn{flex:none;border:1px solid var(--line2);background:transparent;color:var(--muted);font-size:11px;padding:3px 9px;border-radius:999px;cursor:pointer;white-space:nowrap}
+  .colbtn:hover{color:var(--fg)}
+  .colbtn.on{color:var(--accent);border-color:#2c4a6d;background:#16202e}
   .status.live{color:var(--ok);border-color:#26593c}
   .status.dead{color:var(--bad);border-color:#5c2c2c}
 
@@ -292,6 +295,7 @@
     <span class="topname" id="curName">Screendeck</span>
     <span class="topsub" id="curCwd"></span>
     <span class="status" id="conn">idle</span>
+    <button type="button" class="colbtn" id="colBtn" title="Single column — narrows what Claude sees so its side changes panel disappears (window stays full size)">1&#8209;col</button>
     <button type="button" class="paneclose" id="paneClose" title="Close pane (keeps the session running)" aria-label="Close pane" style="display:none" onclick="closePane()">&times;</button>
   </div>
 
@@ -394,6 +398,6 @@
 
 <script src="/vendor/xterm.js"></script>
 <script src="/vendor/addon-fit.js"></script>
-<script src="/app.js?v=20261019j"></script>
+<script src="/app.js?v=20261019k"></script>
 </body>
 </html>
