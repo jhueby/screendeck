@@ -427,33 +427,169 @@ async function loadDirs(p) {
     el.onclick = () => loadDirs(d);
     box.appendChild(el);
   }
+  if (mEngine === 'claude') loadConversations(j.path);
+}
+
+/* engine + conversation/ollama pickers */
+let mEngine = 'claude';
+let mConvSel = null; // null = new conversation; else { id, fork }
+let mOllamaMode = 'agent'; // 'agent' (aider, edits files) | 'chat' (plain REPL)
+
+function fmtAgo(ms) {
+  if (!ms) return '';
+  const s = (Date.now() - ms) / 1000;
+  if (s < 90) return 'just now';
+  if (s < 5400) return Math.round(s / 60) + 'm ago';
+  if (s < 129600) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+
+function updateCreateLabel() {
+  const b = $('mCreate');
+  if ($('mCommand').value.trim()) b.textContent = 'Run';
+  else if (mEngine === 'ollama') b.textContent = 'Start';
+  else if (mConvSel && mConvSel.fork) b.textContent = 'Fork';
+  else if (mConvSel) b.textContent = 'Resume';
+  else b.textContent = 'Create';
+}
+
+function setConvSel(sel, row) {
+  mConvSel = sel;
+  document.querySelectorAll('#convList .convpick').forEach((n) => {
+    n.classList.remove('sel');
+    n.querySelectorAll('.cf').forEach((b) => b.classList.remove('on'));
+  });
+  if (row) row.classList.add('sel');
+  updateCreateLabel();
+}
+
+async function loadConversations(dir) {
+  const box = $('convList');
+  box.innerHTML = '<div style="padding:9px 10px;color:var(--dim);font-size:12px">Loading…</div>';
+  mConvSel = null;
+  let j;
+  try { j = await (await fetch('/api/conversations?dir=' + encodeURIComponent(dir))).json(); }
+  catch (e) { box.innerHTML = '<div style="padding:9px 10px;color:var(--bad);font-size:12px">Could not load</div>'; return; }
+  const convos = j.conversations || [];
+  box.innerHTML = '';
+  const nw = document.createElement('div');
+  nw.className = 'convpick sel';
+  nw.innerHTML = '<span class="ct">✦ New conversation</span>';
+  nw.onclick = () => setConvSel(null, nw);
+  box.appendChild(nw);
+  $('convHint').textContent = convos.length ? convos.length + ' here' : 'none yet';
+  for (const c of convos) {
+    const row = document.createElement('div');
+    row.className = 'convpick';
+    row.innerHTML = `<span class="ct" title="${esc(c.title)}">${esc(c.title)}</span>
+      <span class="cm">${fmtAgo(c.mtime)}</span>
+      <button type="button" class="cf" data-mode="resume">resume</button>
+      <button type="button" class="cf" data-mode="fork">fork</button>`;
+    const pick = (mode) => {
+      setConvSel({ id: c.id, fork: mode === 'fork' }, row);
+      row.querySelector(`.cf[data-mode="${mode}"]`).classList.add('on');
+    };
+    row.querySelector('[data-mode="resume"]').onclick = (e) => { e.stopPropagation(); pick('resume'); };
+    row.querySelector('[data-mode="fork"]').onclick = (e) => { e.stopPropagation(); pick('fork'); };
+    row.onclick = () => pick('resume');
+    box.appendChild(row);
+  }
+}
+
+async function loadOllama(host) {
+  const hostSel = $('mHost'), modelSel = $('mModel');
+  modelSel.innerHTML = '<option>loading…</option>';
+  let j;
+  try { j = await (await fetch('/api/ollama/models' + (host ? '?host=' + encodeURIComponent(host) : ''))).json(); }
+  catch (e) { modelSel.innerHTML = '<option value="">(unreachable)</option>'; return; }
+  // agent mode requires aider on the host
+  const agentBtn = document.querySelector('#ollamaMode button[data-mode="agent"]');
+  if (agentBtn) {
+    agentBtn.disabled = !j.aider;
+    agentBtn.style.opacity = j.aider ? '' : '.5';
+    agentBtn.title = j.aider ? '' : 'aider not installed on this host';
+    if (!j.aider && mOllamaMode === 'agent') setOllamaMode('chat');
+  }
+  if (!hostSel.dataset.loaded) {
+    hostSel.innerHTML = '';
+    for (const h of (j.hosts || [])) {
+      const o = document.createElement('option');
+      o.value = h; o.textContent = h.replace(/^https?:\/\//, '');
+      hostSel.appendChild(o);
+    }
+    hostSel.value = j.host;
+    hostSel.dataset.loaded = '1';
+  }
+  modelSel.innerHTML = '';
+  if (!(j.models || []).length) {
+    modelSel.innerHTML = `<option value="">${j.error ? '(host unreachable)' : '(no models)'}</option>`;
+    $('modelHint').textContent = j.error ? '— ' + j.host.replace(/^https?:\/\//, '') + ' down' : '';
+    return;
+  }
+  $('modelHint').textContent = '— ' + j.models.length + ' available';
+  for (const m of j.models) {
+    const o = document.createElement('option'); o.value = m; o.textContent = m; modelSel.appendChild(o);
+  }
+}
+
+function setOllamaMode(mode) {
+  mOllamaMode = mode;
+  document.querySelectorAll('#ollamaMode button').forEach((b) => b.classList.toggle('on', b.getAttribute('data-mode') === mode));
+  const note = $('agentNote');
+  if (note) note.textContent = mode === 'agent'
+    ? 'Runs aider — reads & edits files in this folder, auto-commits to git.'
+    : 'Plain chat REPL — no file access.';
+}
+
+function setEngine(eng) {
+  mEngine = eng;
+  document.querySelectorAll('#engineSeg button').forEach((b) => b.classList.toggle('on', b.getAttribute('data-engine') === eng));
+  $('claudeOpts').style.display = eng === 'claude' ? '' : 'none';
+  $('ollamaOpts').style.display = eng === 'ollama' ? '' : 'none';
+  if (eng === 'claude') loadConversations($('mDir').value || '');
+  else loadOllama($('mHost').dataset.loaded ? $('mHost').value : '');
+  updateCreateLabel();
 }
 
 function wireModal() {
-  $('newBtn').onclick = () => { $('modal').classList.add('open'); loadDirs(); };
+  $('newBtn').onclick = () => { $('modal').classList.add('open'); setEngine('claude'); loadDirs(); };
   $('mCancel').onclick = () => $('modal').classList.remove('open');
   $('modal').addEventListener('click', (e) => {
     if (e.target === $('modal')) $('modal').classList.remove('open');
   });
+  $('engineSeg').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-engine]');
+    if (b) setEngine(b.getAttribute('data-engine'));
+  });
+  $('mHost').addEventListener('change', () => loadOllama($('mHost').value));
+  $('ollamaMode').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-mode]');
+    if (b && !b.disabled) setOllamaMode(b.getAttribute('data-mode'));
+  });
+  $('mCommand').addEventListener('input', updateCreateLabel);
   $('mCreate').onclick = async () => {
     const btn = $('mCreate');
+    const body = {
+      name: $('mName').value.trim(),
+      dir: $('mDir').value.trim(),
+      command: $('mCommand').value.trim(),
+    };
+    if (body.command) { /* explicit override wins */ }
+    else if (mEngine === 'ollama') {
+      body.engine = 'ollama'; body.host = $('mHost').value; body.model = $('mModel').value; body.mode = mOllamaMode;
+      if (!body.model) { alert('Pick an Ollama model'); return; }
+    } else if (mConvSel) { body.resumeId = mConvSel.id; body.fork = mConvSel.fork; }
     btn.disabled = true;
     try {
       const r = await fetch('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: $('mName').value.trim(),
-          dir: $('mDir').value.trim(),
-          command: $('mCommand').value.trim(),
-          resume: $('mResume').checked,
-        }),
+        body: JSON.stringify(body),
       });
       const j = await r.json();
       if (j.error) { alert('Failed: ' + j.error); return; }
       $('modal').classList.remove('open');
       $('mCommand').value = '';
-      $('mResume').checked = false;
       await refresh();
       // screen needs a beat to register before -x can attach
       setTimeout(() => {
@@ -517,10 +653,108 @@ $('hamb').onclick = () => {
   setTimeout(() => { try { fit.fit(); } catch (_) {} }, 220);
 };
 
+/* ─────────── skills panel ─────────── */
+async function renderSkills() {
+  const box = $('skillsList');
+  box.innerHTML = '<div style="padding:14px;color:var(--dim);font-size:12px">Loading…</div>';
+  let j;
+  try { j = await (await fetch('/api/skills')).json(); }
+  catch (e) { box.innerHTML = '<div style="padding:14px;color:var(--bad);font-size:12px">Could not load skills</div>'; return; }
+  const skills = j.skills || [];
+  document.querySelectorAll('#hubRow button').forEach((b) => { b.disabled = !j.hub; });
+  if (!j.hub) $('hubOut').textContent = 'hub sync not installed on this host';
+  if (!skills.length) {
+    box.innerHTML = '<div style="padding:14px;color:var(--dim);font-size:12px">No skills in ~/.claude/skills.</div>';
+    return;
+  }
+  box.innerHTML = '';
+  for (const s of skills) {
+    const row = document.createElement('div');
+    row.className = 'skrow' + (s.enabled ? '' : ' off');
+    row.innerHTML = `
+      <div class="skhead">
+        <label class="sw" title="${s.enabled ? 'Enabled — click to disable' : 'Disabled — click to enable'}">
+          <input type="checkbox" ${s.enabled ? 'checked' : ''} data-toggle="${esc(s.dir)}">
+          <span class="track"></span><span class="knob"></span>
+        </label>
+        <span class="skname">${esc(s.name)}${s.name !== s.dir ? `<span class="scope">${esc(s.dir)}/</span>` : ''}</span>
+        <button class="skview" data-view="${esc(s.dir)}">view ▾</button>
+      </div>
+      <div class="skdesc">${esc(s.description || '(no description)')}</div>
+      <div class="skbody" data-body="${esc(s.dir)}"></div>`;
+    box.appendChild(row);
+  }
+  box.querySelectorAll('input[data-toggle]').forEach((inp) => {
+    inp.addEventListener('change', async () => {
+      const dir = inp.getAttribute('data-toggle');
+      inp.disabled = true;
+      try {
+        const r = await fetch(`/api/skills/${encodeURIComponent(dir)}/toggle`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: inp.checked }),
+        });
+        const jj = await r.json();
+        if (jj.error) { alert('Toggle failed: ' + jj.error); inp.checked = !inp.checked; }
+        else inp.closest('.skrow').classList.toggle('off', !inp.checked);
+      } catch (e) { alert('Toggle failed'); inp.checked = !inp.checked; }
+      finally { inp.disabled = false; }
+    });
+  });
+  box.querySelectorAll('button[data-view]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const dir = btn.getAttribute('data-view');
+      const body = box.querySelector(`.skbody[data-body="${CSS.escape(dir)}"]`);
+      if (body.classList.contains('open')) { body.classList.remove('open'); btn.textContent = 'view ▾'; return; }
+      btn.textContent = 'hide ▴';
+      if (!body.dataset.loaded) {
+        body.textContent = 'Loading…';
+        try {
+          const jj = await (await fetch('/api/skills/' + encodeURIComponent(dir))).json();
+          body.textContent = jj.content || jj.error || '(empty)';
+          body.dataset.loaded = '1';
+        } catch (e) { body.textContent = 'Could not load SKILL.md'; }
+      }
+      body.classList.add('open');
+    });
+  });
+}
+
+async function hubAction(action) {
+  const out = $('hubOut');
+  out.textContent = action + '…';
+  const btns = document.querySelectorAll('#hubRow button');
+  btns.forEach((b) => { b.disabled = true; });
+  try {
+    const r = await fetch('/api/skills/hub', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    });
+    const j = await r.json();
+    const last = (j.output || '').split('\n').filter(Boolean).pop() || '(done)';
+    out.textContent = (j.ok ? '✓ ' : '✗ ') + last;
+    out.title = j.output || '';
+    if (action === 'pull') renderSkills();
+  } catch (e) { out.textContent = '✗ ' + action + ' failed'; }
+  finally { btns.forEach((b) => { b.disabled = false; }); }
+}
+
+function wireSkills() {
+  $('skillsBtn').onclick = () => { $('skillsModal').classList.add('open'); $('hubOut').textContent = ''; renderSkills(); };
+  $('skillsClose').onclick = () => $('skillsModal').classList.remove('open');
+  $('skillsModal').addEventListener('click', (e) => {
+    if (e.target === $('skillsModal')) $('skillsModal').classList.remove('open');
+  });
+  $('hubRow').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-hub]');
+    if (b && !b.disabled) hubAction(b.getAttribute('data-hub'));
+  });
+}
+
 initTerm();
 wireClipboard();
 wireComposer();
 wireModal();
+wireSkills();
 setConn('idle');
 refresh();
 setInterval(refresh, 5000);

@@ -178,6 +178,60 @@
   .actions .go{background:var(--fg);color:#0d0d0d;border:0;font-weight:600}
   .actions .go:disabled{opacity:.5}
 
+  /* ─────────── engine segmented control + pickers ─────────── */
+  .seg{display:flex;gap:4px;background:var(--bg);border:1px solid var(--line2);border-radius:10px;padding:3px;margin-top:4px}
+  .seg button{flex:1;padding:7px 10px;border:0;background:transparent;color:var(--muted);border-radius:7px;cursor:pointer;font-size:13px}
+  .seg button.on{background:var(--card);color:var(--fg);font-weight:600}
+  .fsel{width:100%;background:var(--bg);border:1px solid var(--line2);color:var(--fg);
+    border-radius:9px;padding:9px 11px;font:13px ui-monospace,monospace;outline:none}
+  .fsel:focus{border-color:#4a4a4a}
+  .convlist{max-height:184px;overflow-y:auto;border:1px solid var(--line2);border-radius:9px;margin-top:6px}
+  .convlist::-webkit-scrollbar{width:8px}
+  .convlist::-webkit-scrollbar-thumb{background:#2f2f2f;border-radius:4px}
+  .convpick{display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--line)}
+  .convpick:last-child{border-bottom:0}
+  .convpick:hover{background:var(--card)}
+  .convpick.sel{background:#16202e;box-shadow:inset 3px 0 0 0 var(--accent)}
+  .convpick .ct{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
+  .convpick .cm{color:var(--dim);font-size:10.5px;flex:0 0 auto}
+  .convpick .cf{flex:0 0 auto;background:none;border:1px solid var(--line2);color:var(--muted);
+    border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer}
+  .convpick .cf:hover{color:var(--accent);border-color:#2c4a6d}
+  .convpick.sel .cf.on{color:var(--accent);border-color:#2c4a6d;background:#0d1826}
+
+  /* ─────────── skills panel ─────────── */
+  .hubrow{display:flex;align-items:center;gap:7px;margin:4px 0 12px}
+  .hubrow button{
+    padding:5px 11px;border-radius:8px;border:1px solid var(--line2);background:transparent;
+    color:var(--muted);cursor:pointer;font-size:12px;
+  }
+  .hubrow button:hover{color:var(--fg);border-color:#4a4a4a}
+  .hubrow button:disabled{opacity:.5;cursor:default}
+  .hubout{font:11px ui-monospace,monospace;color:var(--dim);margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46%}
+  .skills-list{max-height:52vh;overflow-y:auto;border:1px solid var(--line);border-radius:10px}
+  .skills-list::-webkit-scrollbar{width:8px}
+  .skills-list::-webkit-scrollbar-thumb{background:#2f2f2f;border-radius:4px}
+  .skrow{padding:11px 12px;border-bottom:1px solid var(--line)}
+  .skrow:last-child{border-bottom:0}
+  .skrow.off{opacity:.55}
+  .skhead{display:flex;align-items:center;gap:10px}
+  .skname{font-weight:600;font-size:13.5px;flex:0 0 auto}
+  .skname .scope{font-weight:400;font-size:10px;color:var(--dim);margin-left:6px}
+  .skview{margin-left:auto;background:none;border:0;color:var(--muted);cursor:pointer;font-size:11.5px;padding:3px 7px;border-radius:6px}
+  .skview:hover{background:#3a3a3a;color:var(--fg)}
+  .skdesc{font-size:11.5px;color:var(--dim);margin-top:4px;line-height:1.45}
+  .skbody{margin-top:9px;background:var(--bg);border:1px solid var(--line2);border-radius:8px;
+    padding:10px 12px;font:11.5px/1.5 ui-monospace,monospace;color:var(--muted);
+    white-space:pre-wrap;word-break:break-word;max-height:300px;overflow:auto;display:none}
+  .skbody.open{display:block}
+  /* toggle switch */
+  .sw{position:relative;width:34px;height:19px;flex:0 0 34px;cursor:pointer}
+  .sw input{opacity:0;width:0;height:0;position:absolute}
+  .sw .track{position:absolute;inset:0;background:#3a3a3a;border-radius:999px;transition:background .15s}
+  .sw .knob{position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:#bbb;transition:transform .15s}
+  .sw input:checked + .track{background:var(--ok)}
+  .sw input:checked + .track + .knob{transform:translateX(15px);background:#fff}
+
   @media (max-width:760px){
     aside{position:absolute;z-index:15;height:100%}
   }
@@ -189,6 +243,10 @@
     <button class="newbtn" id="newBtn">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
       New session
+    </button>
+    <button class="newbtn" id="skillsBtn" style="margin-top:8px">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+      Skills
     </button>
   </div>
   <div class="side-label">Sessions</div>
@@ -263,21 +321,60 @@
   <div class="card">
     <h2>New session</h2>
     <div class="cardsub">Runs inside GNU screen, so it survives this tab closing.</div>
+
+    <div class="seg" id="engineSeg">
+      <button type="button" data-engine="claude" class="on">Claude</button>
+      <button type="button" data-engine="ollama">Ollama</button>
+    </div>
+
     <label>Name</label>
     <input type="text" id="mName" placeholder="session" value="session">
     <label>Working directory</label>
     <input type="text" id="mDir">
     <div class="dirlist" id="dirs"></div>
-    <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-      <input type="checkbox" id="mResume" style="margin:0">
-      Resume last Claude conversation in this directory
-    </label>
-    <label>Command <span style="color:var(--dim)">— blank runs the default, or resumes if checked above</span></label>
+
+    <div id="claudeOpts">
+      <label style="display:flex;align-items:center;justify-content:space-between">
+        <span>Conversation</span>
+        <span id="convHint" style="color:var(--dim);font-weight:400;font-size:11px"></span>
+      </label>
+      <div class="convlist" id="convList"></div>
+    </div>
+
+    <div id="ollamaOpts" style="display:none">
+      <label>Mode</label>
+      <div class="seg" id="ollamaMode">
+        <button type="button" data-mode="agent" class="on">Agent · edits files</button>
+        <button type="button" data-mode="chat">Chat</button>
+      </div>
+      <div id="agentNote" style="color:var(--dim);font-size:10.5px;margin-top:5px"></div>
+      <label>Host</label>
+      <select id="mHost" class="fsel"></select>
+      <label>Model <span id="modelHint" style="color:var(--dim);font-weight:400"></span></label>
+      <select id="mModel" class="fsel"></select>
+    </div>
+
+    <label>Command <span style="color:var(--dim)">— blank uses the engine choice above</span></label>
     <textarea class="f" id="mCommand" placeholder="e.g. npm run dev   |   htop   |   ./job.sh"></textarea>
     <div class="actions">
       <button id="mCancel">Cancel</button>
       <button class="go" id="mCreate">Create</button>
     </div>
+  </div>
+</div>
+
+<div class="modal" id="skillsModal">
+  <div class="card" style="width:min(680px,100%)">
+    <h2>Skills</h2>
+    <div class="cardsub">Claude Code skills in <code>~/.claude/skills</code> — toggle on/off, inspect, and sync the hub.</div>
+    <div class="hubrow" id="hubRow">
+      <button data-hub="status">Status</button>
+      <button data-hub="pull">Pull</button>
+      <button data-hub="push">Push</button>
+      <span class="hubout" id="hubOut"></span>
+    </div>
+    <div class="skills-list" id="skillsList"></div>
+    <div class="actions"><button id="skillsClose">Close</button></div>
   </div>
 </div>
 

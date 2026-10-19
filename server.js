@@ -145,19 +145,24 @@ async function cfKey(kid) {
 async function cfAccessOk(req) {
   if (!req.headers['cf-ray']) return true;
   const token = req.headers['cf-access-jwt-assertion'];
-  if (!CF_TEAM || !CF_AUD || typeof token !== 'string') return false;
+  const deny = (why) => { console.error(`access denied ${req.method} ${req.url}: ${why}`); return false; };
+  if (!CF_TEAM || !CF_AUD) return deny('CF_ACCESS_TEAM_DOMAIN/CF_ACCESS_AUD not set');
+  if (typeof token !== 'string') return deny('no Cf-Access-Jwt-Assertion');
   try {
     const [h, p, sig] = token.split('.');
     const header = JSON.parse(Buffer.from(h, 'base64url'));
     const claims = JSON.parse(Buffer.from(p, 'base64url'));
-    if (header.alg !== 'RS256') return false;
+    if (header.alg !== 'RS256') return deny(`alg ${header.alg}`);
     const key = await cfKey(header.kid);
-    if (!key || !crypto.verify('RSA-SHA256', Buffer.from(`${h}.${p}`), key, Buffer.from(sig, 'base64url'))) return false;
+    if (!key) return deny(`unknown kid ${header.kid}`);
+    if (!crypto.verify('RSA-SHA256', Buffer.from(`${h}.${p}`), key, Buffer.from(sig, 'base64url'))) return deny('bad signature');
     const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-    return claims.iss === `https://${CF_TEAM}` && aud.includes(CF_AUD) && claims.exp * 1000 > Date.now();
+    if (claims.iss !== `https://${CF_TEAM}`) return deny(`issuer ${claims.iss}`);
+    if (!aud.includes(CF_AUD)) return deny(`aud ${aud.join(',')}`);
+    if (claims.exp * 1000 <= Date.now()) return deny('expired');
+    return true;
   } catch (e) {
-    console.error('access check failed:', e.message);
-    return false;
+    return deny(e.message);
   }
 }
 
@@ -466,16 +471,41 @@ app.post('/api/dirs', (req, res) => {
 });
 
 app.post('/api/sessions', async (req, res) => {
-  const { dir, command, name, resume } = req.body || {};
+  const { dir, command, name, resume, engine, model, host, resumeId, fork } = req.body || {};
   const cwd = dir || DEFAULT_DIR;
   if (!fs.existsSync(cwd)) return res.status(400).json({ error: `no such directory: ${cwd}` });
   if (!withinWorkspace(cwd)) return res.status(403).json({ error: 'outside workspace root' });
 
   const safe = (name || 'session').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) || 'session';
   const sessionName = `${SESSION_PREFIX}${safe}-${Date.now().toString(36)}`;
-  // --continue is claude-specific, so it's applied regardless of DEFAULT_COMMAND —
-  // "resume" only ever means resuming a Claude Code conversation.
-  const toRun = (command && command.trim()) || (resume ? 'claude --continue' : DEFAULT_COMMAND);
+  // Command building by engine. An explicit command override always wins; then
+  // Ollama (local-model chat REPL); then resume/fork a specific Claude
+  // conversation by id; then --continue (most recent); else the default.
+  let toRun;
+  if (command && command.trim()) {
+    toRun = command.trim();
+  } else if (engine === 'ollama') {
+    const m = String(model || '').trim();
+    if (!/^[A-Za-z0-9._:/-]+$/.test(m)) return res.status(400).json({ error: 'pick an Ollama model' });
+    const oh = OLLAMA_HOSTS.includes(host) ? host : OLLAMA_HOSTS[0];
+    if (req.body.mode === 'agent') {
+      const ab = aiderBin();
+      if (!ab) return res.status(400).json({ error: 'aider is not installed on this host' });
+      // aider reaches Ollama through litellm (ollama_chat/<model>). OLLAMA_API_BASE
+      // selects the host; OLLAMA_CONTEXT_LENGTH lifts Ollama's tiny default context
+      // so the repo map + edits fit. User drives/approves edits in the terminal.
+      toRun = `OLLAMA_API_BASE=${shellQuote(oh)} OLLAMA_CONTEXT_LENGTH=8192 ${shellQuote(ab)} --model ${shellQuote('ollama_chat/' + m)}`;
+    } else {
+      toRun = `OLLAMA_HOST=${shellQuote(oh)} python3 ${shellQuote(path.join(__dirname, 'ollama-chat.py'))} ${shellQuote(m)}`;
+    }
+  } else if (resumeId) {
+    if (!/^[A-Za-z0-9._-]+$/.test(String(resumeId))) return res.status(400).json({ error: 'invalid conversation id' });
+    toRun = `claude --resume ${shellQuote(String(resumeId))}${fork ? ' --fork-session' : ''}`;
+  } else if (resume) {
+    toRun = 'claude --continue';
+  } else {
+    toRun = DEFAULT_COMMAND;
+  }
 
   // Run through a login shell so PATH, aliases and profile behave as expected.
   const { err, stderr } = await sh(
@@ -537,6 +567,195 @@ app.delete('/api/sessions/:name', async (req, res) => {
   res.json({ ok: true });
 });
 
+// ─────────── Claude Code skills ───────────
+// Skills are directories under ~/.claude/skills each holding a SKILL.md. Claude
+// Code discovers them by presence, so "disable" = move the dir into .disabled/
+// (still one level down, but without a SKILL.md at the scanned depth, so it's
+// invisible to Claude Code while remaining trivially reversible).
+const SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills');
+const SKILLS_DISABLED = path.join(SKILLS_DIR, '.disabled');
+const HUB_SYNC = path.join(SKILLS_DIR, 'skills-hub', 'scripts', 'sync.sh');
+// .disabled is our own bookkeeping; synced/ is claude.ai's self-syncing bucket,
+// nested differently and not ours to toggle — hide both from the manageable set.
+const SKILL_RESERVED = new Set(['.disabled', 'synced']);
+const SKILL_NAME_RE = /^[A-Za-z0-9._-]+$/;
+
+function safeSkillName(name) {
+  const n = String(name || '');
+  if (!SKILL_NAME_RE.test(n) || n === '.' || n === '..' || SKILL_RESERVED.has(n)) return null;
+  return n;
+}
+
+// Pull name + description out of a SKILL.md YAML frontmatter block. Handles both
+// a single-line `description:` and a folded/literal (`>` / `|`) block.
+function parseSkillMeta(md, fallback) {
+  const out = { name: fallback, description: '' };
+  const fmMatch = /^---\s*\n([\s\S]*?)\n---/.exec(md);
+  if (!fmMatch) return out;
+  const fm = fmMatch[1];
+  const nameM = /^name:[ \t]*(.+)$/m.exec(fm);
+  if (nameM) out.name = nameM[1].trim();
+  const descM = /^description:[ \t]*(>[-+]?|\|[-+]?)?[ \t]*(.*)$/m.exec(fm);
+  if (descM) {
+    if (descM[1]) {
+      // folded/literal block: gather the following more-indented lines
+      const rest = fm.slice(descM.index + descM[0].length).replace(/^\n/, '').split('\n');
+      const buf = [descM[2]];
+      for (const line of rest) {
+        if (line.trim() === '' || /^[ \t]/.test(line)) buf.push(line.trim());
+        else break;
+      }
+      out.description = buf.join(' ').replace(/\s+/g, ' ').trim();
+    } else {
+      out.description = descM[2].trim();
+    }
+  }
+  return out;
+}
+
+function readSkillDir(baseDir, enabled) {
+  let entries;
+  try { entries = fs.readdirSync(baseDir, { withFileTypes: true }); } catch (_) { return []; }
+  const out = [];
+  for (const d of entries) {
+    if (!d.isDirectory()) continue;
+    if (enabled && SKILL_RESERVED.has(d.name)) continue;
+    const skillMd = path.join(baseDir, d.name, 'SKILL.md');
+    if (!fs.existsSync(skillMd)) continue;
+    let meta = { name: d.name, description: '' };
+    let mtime = null;
+    try {
+      meta = parseSkillMeta(fs.readFileSync(skillMd, 'utf8'), d.name);
+      mtime = fs.statSync(skillMd).mtimeMs;
+    } catch (_) { /* unreadable — still list it by dir name */ }
+    out.push({ dir: d.name, name: meta.name || d.name, description: meta.description, enabled, mtime });
+  }
+  return out;
+}
+
+app.get('/api/skills', (_req, res) => {
+  const list = [...readSkillDir(SKILLS_DIR, true), ...readSkillDir(SKILLS_DISABLED, false)];
+  list.sort((a, b) => a.dir.localeCompare(b.dir));
+  res.json({ skills: list, hub: fs.existsSync(HUB_SYNC), dir: SKILLS_DIR });
+});
+
+app.get('/api/skills/:name', (req, res) => {
+  const name = safeSkillName(req.params.name);
+  if (!name) return res.status(400).json({ error: 'invalid skill name' });
+  for (const base of [SKILLS_DIR, SKILLS_DISABLED]) {
+    const f = path.join(base, name, 'SKILL.md');
+    if (fs.existsSync(f)) {
+      try {
+        return res.json({ name, enabled: base === SKILLS_DIR, content: fs.readFileSync(f, 'utf8').slice(0, 200000) });
+      } catch (e) { return res.status(500).json({ error: String(e) }); }
+    }
+  }
+  res.status(404).json({ error: 'not found' });
+});
+
+app.post('/api/skills/:name/toggle', (req, res) => {
+  const name = safeSkillName(req.params.name);
+  if (!name) return res.status(400).json({ error: 'invalid skill name' });
+  const enable = !!(req.body && req.body.enabled);
+  const from = path.join(enable ? SKILLS_DISABLED : SKILLS_DIR, name);
+  const to = path.join(enable ? SKILLS_DIR : SKILLS_DISABLED, name);
+  if (!fs.existsSync(path.join(from, 'SKILL.md'))) return res.status(404).json({ error: 'not found' });
+  if (fs.existsSync(to)) return res.status(409).json({ error: 'a skill with that name already exists on the other side' });
+  try {
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.renameSync(from, to);
+  } catch (e) { return res.status(500).json({ error: String(e) }); }
+  res.json({ ok: true, name, enabled: enable });
+});
+
+app.post('/api/skills/hub', async (req, res) => {
+  const action = String((req.body && req.body.action) || '');
+  if (!['pull', 'push', 'status'].includes(action)) return res.status(400).json({ error: 'action must be pull|push|status' });
+  if (!fs.existsSync(HUB_SYNC)) return res.status(404).json({ error: 'skills-hub is not installed' });
+  const { err, stdout, stderr } = await sh('bash', [HUB_SYNC, action], { timeout: 45000 });
+  res.json({ ok: !err, action, output: ((stdout || '') + (stderr || '')).trim().slice(-8000) || (err ? String(err) : '(no output)') });
+});
+
+// ─────────── conversations (resume / fork) ───────────
+// Claude keeps one transcript per conversation at
+// ~/.claude/projects/<cwd-with-slashes-as-dashes>/<session-id>.jsonl
+function projectDirFor(cwd) {
+  return path.join(os.homedir(), '.claude', 'projects', String(cwd).replace(/\//g, '-'));
+}
+// Transcripts sometimes capture raw terminal noise — ANSI/OSC escapes and SGR
+// mouse reports like "4;22M5;22M…" — as message text. Strip it so titles read.
+const RE_ESC = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
+const RE_MOUSE = /(?:\d+;\d+;\d+[Mm])+|(?:\d+;\d+[Mm]){2,}/g;
+const RE_CTRL = /[\x00-\x08\x0b-\x1f\x7f]/g;
+function cleanTitle(s) {
+  return String(s || '').replace(RE_ESC, '').replace(RE_MOUSE, '').replace(RE_CTRL, '')
+    .replace(/\s+/g, ' ').trim();
+}
+function readHead(file, bytes) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const buf = Buffer.alloc(bytes);
+    const n = fs.readSync(fd, buf, 0, bytes, 0);
+    return buf.subarray(0, n).toString('utf8');
+  } finally { fs.closeSync(fd); }
+}
+
+app.get('/api/conversations', (req, res) => {
+  const cwd = req.query.dir;
+  if (!cwd) return res.status(400).json({ error: 'dir required' });
+  let files;
+  try { files = fs.readdirSync(projectDirFor(cwd)).filter((f) => f.endsWith('.jsonl')); }
+  catch (_) { return res.json({ conversations: [] }); }
+  const pdir = projectDirFor(cwd);
+  const convos = files.map((f) => {
+    const full = path.join(pdir, f);
+    let title = null, firstUser = null, mtime = 0;
+    try {
+      mtime = fs.statSync(full).mtimeMs;
+      for (const ln of readHead(full, 65536).split('\n')) {
+        if (!ln.trim()) continue;
+        let d; try { d = JSON.parse(ln); } catch (_) { continue; }
+        if (d.type === 'custom-title' && d.customTitle) { title = d.customTitle; break; }
+        if (!firstUser && d.type === 'user') {
+          const c = d.message && d.message.content;
+          if (typeof c === 'string') firstUser = c;
+          else if (Array.isArray(c)) { const t = c.find((p) => p && p.type === 'text'); if (t) firstUser = t.text; }
+        }
+      }
+    } catch (_) {}
+    return { id: f.replace(/\.jsonl$/, ''), title: cleanTitle(title || firstUser).slice(0, 90) || '(untitled)', mtime };
+  }).filter((c) => c.id).sort((a, b) => b.mtime - a.mtime).slice(0, 60);
+  res.json({ conversations: convos });
+});
+
+// ─────────── Ollama engine ───────────
+// Two Ollama hosts on the homelab (.21, .22); either can be picked per session.
+const OLLAMA_HOSTS = (process.env.OLLAMA_HOSTS || 'http://192.168.1.21:11434,http://192.168.1.22:11434')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+
+// aider gives Ollama models an agentic (file-editing, git) coding loop. It lives
+// in a venv or the user site depending on how it installed; resolve either.
+function aiderBin() {
+  const cands = [
+    path.join(os.homedir(), '.aider-venv', 'bin', 'aider'),
+    path.join(os.homedir(), '.local', 'bin', 'aider'),
+  ];
+  return cands.find((p) => fs.existsSync(p)) || null;
+}
+
+app.get('/api/ollama/models', async (req, res) => {
+  const host = OLLAMA_HOSTS.includes(req.query.host) ? req.query.host : OLLAMA_HOSTS[0];
+  const aider = !!aiderBin();
+  try {
+    const r = await fetch(`${host}/api/tags`, { signal: AbortSignal.timeout(5000) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    res.json({ host, hosts: OLLAMA_HOSTS, models: (j.models || []).map((m) => m.name), aider });
+  } catch (e) {
+    res.json({ host, hosts: OLLAMA_HOSTS, models: [], error: String((e && e.message) || e), aider });
+  }
+});
+
 const server = http.createServer(app);
 // The browser attaches its Access cookie to a cross-site WebSocket too, so a
 // foreign page could otherwise drive a terminal; only same-host origins attach.
@@ -567,7 +786,15 @@ wss.on('connection', (ws, req) => {
     env: { ...process.env, TERM: 'xterm-256color' },
   });
 
-  term.onData((d) => { if (ws.readyState === ws.OPEN) ws.send(d); });
+  // The web terminal must never start mouse tracking: when a TUI (Claude Code)
+  // enables it, xterm.js reports every mouse move back, and those reports leak
+  // into the session as text ("4;22M5;22M…") — the mouse problem. Strip the
+  // enable sequences on the way out so xterm never turns mouse on, and strip any
+  // stray SGR mouse reports on the way in as defence in depth.
+  const stripMouseEnable = (s) => s.replace(/\x1b\[\?100[0-6]h/g, '');
+  const stripMouseReports = (s) => s.replace(/\x1b\[<\d+;\d+;\d+[Mm]/g, '');
+
+  term.onData((d) => { if (ws.readyState === ws.OPEN) ws.send(stripMouseEnable(d)); });
   term.onExit(({ exitCode }) => {
     if (ws.readyState === ws.OPEN) {
       ws.send(`\r\n\x1b[33m[detached from ${session} (exit ${exitCode})]\x1b[0m\r\n`);
@@ -578,7 +805,7 @@ wss.on('connection', (ws, req) => {
   ws.on('message', (raw) => {
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
-    if (msg.type === 'input') term.write(msg.data);
+    if (msg.type === 'input') term.write(stripMouseReports(msg.data));
     else if (msg.type === 'resize') { try { term.resize(msg.cols, msg.rows); } catch (_) {} }
   });
 
